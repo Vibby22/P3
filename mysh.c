@@ -55,13 +55,6 @@ void handle_which(char **tokens) {
     fprintf(stderr, "which: command not found: %s\n", tokens[1]);
 }
 
-void handle_exit(char **tokens) {
-    if (tokens[1] != NULL) {
-        printf("Exiting with message: %s\n", tokens[1]);
-    }
-    exit(0);
-}
-
 void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
     for (int i = 0; tokens[i] != NULL; i++) {
         if (strcmp(tokens[i], "<") == 0) {
@@ -174,6 +167,14 @@ void free_tokens(char **tokens) {
     free(tokens);
 }
 
+void handle_exit(char **tokens) {
+    if (tokens[1] != NULL) {
+        printf("Exiting with message: %s\n", tokens[1]);
+    }
+    free_tokens(tokens);
+    exit(0);
+}
+
 int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
@@ -249,4 +250,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
