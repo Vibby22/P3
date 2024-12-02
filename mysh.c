@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>  // For isatty(), chdir(), fork(), execv()
+#include <unistd.h>  // For isatty(), chdir(), fork(), execvp(), dup2()
 #include <fcntl.h>   // For open()
 #include <sys/wait.h>  // For wait()
 
@@ -15,6 +15,7 @@ void handle_exit(char **tokens);
 void execute_external_command(char **tokens);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
+void handle_redirection(char **tokens, int *input_fd, int *output_fd);
 
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
@@ -61,7 +62,38 @@ void handle_exit(char **tokens) {
     exit(0);
 }
 
+void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
+    for (int i = 0; tokens[i] != NULL; i++) {
+        if (strcmp(tokens[i], "<") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for input redirection\n");
+                return;
+            }
+            *input_fd = open(tokens[i + 1], O_RDONLY);
+            if (*input_fd < 0) {
+                perror("open input file");
+                return;
+            }
+            tokens[i] = NULL;  // Remove < and the file name from tokens
+        } else if (strcmp(tokens[i], ">") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for output redirection\n");
+                return;
+            }
+            *output_fd = open(tokens[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+            if (*output_fd < 0) {
+                perror("open output file");
+                return;
+            }
+            tokens[i] = NULL;  // Remove > and the file name from tokens
+        }
+    }
+}
+
 void execute_external_command(char **tokens) {
+    int input_fd = -1, output_fd = -1;
+    handle_redirection(tokens, &input_fd, &output_fd);
+
     pid_t pid = fork();
 
     if (pid < 0) {
@@ -71,8 +103,24 @@ void execute_external_command(char **tokens) {
 
     if (pid == 0) {
         // Child process
-        if (execv(tokens[0], tokens) == -1) {
-            perror("execv");
+        if (input_fd != -1) {
+            if (dup2(input_fd, STDIN_FILENO) == -1) {
+                perror("dup2 input");
+                exit(EXIT_FAILURE);
+            }
+            close(input_fd);
+        }
+        if (output_fd != -1) {
+            if (dup2(output_fd, STDOUT_FILENO) == -1) {
+                perror("dup2 output");
+                exit(EXIT_FAILURE);
+            }
+            close(output_fd);
+        }
+
+        // Use execvp to search for the command in PATH
+        if (execvp(tokens[0], tokens) == -1) {
+            perror("execvp");
             exit(EXIT_FAILURE);
         }
     } else {
@@ -89,6 +137,8 @@ void execute_external_command(char **tokens) {
                 fprintf(stderr, "Terminated by signal: %d\n", WTERMSIG(status));
             }
         }
+        if (input_fd != -1) close(input_fd);
+        if (output_fd != -1) close(output_fd);
     }
 }
 
