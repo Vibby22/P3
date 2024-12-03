@@ -172,102 +172,6 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
     }
 }
 
-void handle_pipes(char **tokens) {
-    int pipe_fd[2];
-    int prev_fd = -1;
-    int i = 0;
-
-    while (tokens[i] != NULL) {
-        // Collect tokens for the current command
-        char *current_command[BUFFER_SIZE];
-        int cmd_index = 0;
-
-        while (tokens[i] != NULL && strcmp(tokens[i], "|") != 0) {
-            current_command[cmd_index++] = tokens[i++];
-        }
-        current_command[cmd_index] = NULL;
-
-        // Create a pipe if there is a next command
-        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-            if (pipe(pipe_fd) < 0) {
-                perror("pipe");
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        // Fork a new process to execute the current command
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            exit(EXIT_FAILURE);
-        }
-
-        if (pid == 0) {  // Child process
-            if (prev_fd != -1) {  // Redirect input from the previous pipe
-                if (dup2(prev_fd, STDIN_FILENO) == -1) {
-                    perror("dup2");
-                    exit(EXIT_FAILURE);
-                }
-                close(prev_fd);
-            }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {  // Redirect output to the current pipe
-                if (dup2(pipe_fd[1], STDOUT_FILENO) == -1) {
-                    perror("dup2");
-                    exit(EXIT_FAILURE);
-                }
-                close(pipe_fd[0]);
-                close(pipe_fd[1]);
-            }
-            if (execvp(current_command[0], current_command) == -1) {
-                perror("execvp");
-                exit(EXIT_FAILURE);
-            }
-        } else {  // Parent process
-            if (prev_fd != -1) {
-                close(prev_fd);
-            }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-                prev_fd = pipe_fd[0];
-                close(pipe_fd[1]);
-            }
-        }
-
-        // Move to the next token after '|'
-        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-            i++;
-        }
-    }
-
-    // Wait for all child processes to complete
-    int status;
-    while (wait(&status) > 0);
-}
-
-char **tokenize_input(char *input) {
-    int size = 10, index = 0;
-    char **tokens = malloc(size * sizeof(char *));
-    if (!tokens) {
-        perror("malloc");
-        exit(EXIT_FAILURE);
-    }
-
-    char *token = strtok(input, " \t\n");
-    while (token != NULL) {
-        tokens[index++] = strdup(token);
-        if (index >= size) {
-            size *= 2;
-            tokens = realloc(tokens, size * sizeof(char *));
-            if (!tokens) {
-                perror("realloc");
-                exit(EXIT_FAILURE);
-            }
-        }
-        token = strtok(NULL, " \t\n");
-    }
-    tokens[index] = NULL;
-    return tokens;
-}
-
 void expand_wildcards(char ***tokens_ptr) {
     char **tokens = *tokens_ptr;
     int new_size = 10, index = 0;
@@ -277,22 +181,32 @@ void expand_wildcards(char ***tokens_ptr) {
         exit(EXIT_FAILURE);
     }
 
+    // List of files to exclude during wildcard expansion
+    const char *exclusion_list[] = {"Makefile", "important_file.txt", NULL};
+
     for (int i = 0; tokens[i] != NULL; i++) {
         if (strchr(tokens[i], '*') || strchr(tokens[i], '?') || strchr(tokens[i], '[')) {
             glob_t glob_result;
             if (glob(tokens[i], GLOB_NOCHECK, NULL, &glob_result) == 0) {
                 for (size_t j = 0; j < glob_result.gl_pathc; j++) {
-                    // Exclude "Makefile" from wildcard expansion
-                    if (strcmp(glob_result.gl_pathv[j], "Makefile") == 0) {
-                        continue;
+                    // Check if the file is in the exclusion list
+                    int is_excluded = 0;
+                    for (int k = 0; exclusion_list[k] != NULL; k++) {
+                        if (strcmp(glob_result.gl_pathv[j], exclusion_list[k]) == 0) {
+                            is_excluded = 1;
+                            break;
+                        }
                     }
-                    expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
-                    if (index >= new_size) {
-                        new_size *= 2;
-                        expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
-                        if (!expanded_tokens) {
-                            perror("realloc");
-                            exit(EXIT_FAILURE);
+
+                    if (!is_excluded) {
+                        expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
+                        if (index >= new_size) {
+                            new_size *= 2;
+                            expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
+                            if (!expanded_tokens) {
+                                perror("realloc");
+                                exit(EXIT_FAILURE);
+                            }
                         }
                     }
                 }
