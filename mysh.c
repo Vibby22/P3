@@ -9,19 +9,20 @@
 
 #define BUFFER_SIZE 1024
 
-// Function prototypes
-void handle_cd(char **tokens);
-void handle_pwd();
-void handle_which(char **tokens);
-void handle_exit(char **tokens);
-void execute_external_command(char **tokens);
-void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens);
-void handle_redirection(char **tokens, int *input_fd, int *output_fd);
-void expand_wildcards(char ***tokens_ptr);
-char **tokenize_input(char *input);
-void free_tokens(char **tokens);
+// Function pre-declarations to prevent explosions
+void handleCd(char **tokens);
+void handlePwd();
+void handleWhich(char **tokens);
+void handleExit(char **tokens);
+void executeExternalCommand(char **tokens);
+void executeWithPipe(char **cmd1_tokens, char **cmd2_tokens);
+void handleRedirect(char **tokens, int *input_fd, int *output_fd);
+void expandWildcards(char ***tokens_ptr);
+char **inputToTokens(char *input);
+void freeTokens(char **tokens);
 
-void handle_cd(char **tokens) {
+// handles change directory
+void handleCd(char **tokens) {
     if (tokens[1] == NULL) {
         fprintf(stderr, "cd: missing argument\n");
         return;
@@ -31,7 +32,8 @@ void handle_cd(char **tokens) {
     }
 }
 
-void handle_pwd() {
+// handles current directory path using cwd
+void handlePwd() {
     char cwd[BUFFER_SIZE];
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         perror("pwd");
@@ -40,12 +42,14 @@ void handle_pwd() {
     }
 }
 
-void handle_which(char **tokens) {
+// handles which (shows filepath of parsed file)
+void handleWhich(char **tokens) {
     if (tokens[1] == NULL) {
         fprintf(stderr, "which: missing argument\n");
         return;
     }
 
+    // array for builtin commands
     const char *paths[] = {"/usr/local/bin", "/usr/bin", "/bin"};
     char path[BUFFER_SIZE];
     for (int i = 0; i < 3; i++) {
@@ -58,20 +62,24 @@ void handle_which(char **tokens) {
     fprintf(stderr, "which: command not found: %s\n", tokens[1]);
 }
 
-void handle_exit(char **tokens) {
+void handleExit(char **tokens) {
     if (tokens[1] != NULL) {
         printf("Exiting with message: %s\n", tokens[1]);
     }
+
+    // frees tokens array on exit to prevent leaks
+    freeTokens(char **tokens);
     exit(0);
 }
 
-void expand_wildcards(char ***tokens_ptr) {
+// processes wildcards like * and ?
+void expandWildcards(char ***tokens_ptr) {
     char **tokens = *tokens_ptr;
-    char **expanded_tokens = NULL; // Array to hold the expanded tokens
+    char **expanded_tokens = NULL; // array holds expanded tokens
     int expanded_count = 0;
 
     for (int i = 0; tokens[i] != NULL; i++) {
-        if (strchr(tokens[i], '*')) {  // Check if token contains a wildcard
+        if (strchr(tokens[i], '*')) {  // checks for wildcard in token
             DIR *dir = opendir(".");
             if (!dir) {
                 perror("opendir");
@@ -82,14 +90,14 @@ void expand_wildcards(char ***tokens_ptr) {
             int matches_found = 0;
 
             while ((entry = readdir(dir)) != NULL) {
-                if (fnmatch(tokens[i], entry->d_name, 0) == 0) {  // Match the pattern
+                if (fnmatch(tokens[i], entry->d_name, 0) == 0) {  
                     expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
                     if (!expanded_tokens) {
                         perror("realloc");
                         closedir(dir);
                         return;
                     }
-                    expanded_tokens[expanded_count++] = strdup(entry->d_name);  // Add match
+                    expanded_tokens[expanded_count++] = strdup(entry->d_name);  
                     matches_found++;
                 }
             }
@@ -128,10 +136,11 @@ void expand_wildcards(char ***tokens_ptr) {
     }
     free(tokens);
 
-    *tokens_ptr = expanded_tokens;  // Update the pointer to the new array
+    *tokens_ptr = expanded_tokens;  //finalized array is put into tokens_ptr
 }
 
-void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
+void handleRedirect(char **tokens, int *input_fd, int *output_fd) {
+    // checks for NULL token after redirect token
     for (int i = 0; tokens[i] != NULL; i++) {
         if (strcmp(tokens[i], "<") == 0) {
             if (tokens[i + 1] == NULL) {
@@ -146,6 +155,7 @@ void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
             tokens[i] = NULL;
         } else if (strcmp(tokens[i], ">") == 0) {
             if (tokens[i + 1] == NULL) {
+                // checks for incomplete command structure
                 fprintf(stderr, "Syntax error: no file specified for output redirection\n");
                 return;
             }
@@ -159,7 +169,8 @@ void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
     }
 }
 
-void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens) {
+// pipe execution
+void executeWithPipe(char **cmd1_tokens, char **cmd2_tokens) {
     int pipefd[2];
     if (pipe(pipefd) == -1) {
         perror("pipe");
@@ -172,7 +183,7 @@ void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens) {
         return;
     }
 
-    if (pid1 == 0) {  // First child
+    if (pid1 == 0) {  // arg before pipe (write output)
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
@@ -187,7 +198,7 @@ void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens) {
         return;
     }
 
-    if (pid2 == 0) {  // Second child
+    if (pid2 == 0) {  // arg after pipe (read first arg output)
         close(pipefd[1]);
         dup2(pipefd[0], STDIN_FILENO);
         close(pipefd[0]);
@@ -202,9 +213,10 @@ void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens) {
     waitpid(pid2, NULL, 0);
 }
 
-void execute_external_command(char **tokens) {
+// executes all commands including builtins
+void executeExternalCommand(char **tokens) {
     int input_fd = -1, output_fd = -1;
-    handle_redirection(tokens, &input_fd, &output_fd);
+    handleRedirect(tokens, &input_fd, &output_fd);
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -212,7 +224,7 @@ void execute_external_command(char **tokens) {
         return;
     }
 
-    if (pid == 0) {  // Child process
+    if (pid == 0) {  // child process using dup2
         if (input_fd != -1) {
             dup2(input_fd, STDIN_FILENO);
             close(input_fd);
@@ -222,16 +234,16 @@ void execute_external_command(char **tokens) {
             close(output_fd);
         }
 
-        // Resolve the full path manually
+        // resolves the full path manually
         const char *paths[] = {"/usr/local/bin", "/usr/bin", "/bin"};
         char full_path[BUFFER_SIZE];
         int found = 0;
 
-        if (strchr(tokens[0], '/')) {  // If the command contains a slash, treat it as a path
+        if (strchr(tokens[0], '/')) {  // in case of slash in command -> treat as path
             strncpy(full_path, tokens[0], BUFFER_SIZE);
             full_path[BUFFER_SIZE - 1] = '\0';
             found = access(full_path, X_OK) == 0;
-        } else {  // Search in the predefined paths
+        } else {  // search defined paths
             for (int i = 0; i < 3; i++) {
                 snprintf(full_path, sizeof(full_path), "%s/%s", paths[i], tokens[0]);
                 if (access(full_path, X_OK) == 0) {
@@ -246,16 +258,17 @@ void execute_external_command(char **tokens) {
             exit(EXIT_FAILURE);
         }
 
-        // Execute the command using execv
+        // execute command with execv
         execv(full_path, tokens);
         perror("execv");
         exit(EXIT_FAILURE);
-    } else {  // Parent process
+    } else {  
         wait(NULL);
     }
 }
 
-char **tokenize_input(char *input) {
+// converts input to tokens
+char **inputToTokens(char *input) {
     int size = 10, index = 0;
     char **tokens = malloc(size * sizeof(char *));
     if (!tokens) {
@@ -280,7 +293,8 @@ char **tokenize_input(char *input) {
     return tokens;
 }
 
-void free_tokens(char **tokens) {
+// frees array of tokens
+void freeTokens(char **tokens) {
     for (int i = 0; tokens[i] != NULL; i++) {
         free(tokens[i]);
     }
@@ -292,8 +306,8 @@ int main(int argc, char *argv[]) {
     ssize_t bytes_read;
     char **tokens;
     int is_interactive = isatty(STDIN_FILENO);
-    int batch_mode = (argc == 2);  // Batch mode if a file is specified
-    int input_fd = STDIN_FILENO;   // Default to standard input
+    int batch_mode = (argc == 2);  // if file input -> batch mode
+    int input_fd = STDIN_FILENO;   //else default to stdin
 
     if (batch_mode) {
         input_fd = open(argv[1], O_RDONLY);
@@ -301,7 +315,7 @@ int main(int argc, char *argv[]) {
             perror("open");
             return EXIT_FAILURE;
         }
-        is_interactive = 0;  // Disable interactive behavior in batch mode
+        is_interactive = 0;  // disables interaction in batch mode
     }
 
     if (is_interactive) {
@@ -315,16 +329,16 @@ int main(int argc, char *argv[]) {
         }
 
         bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-        if (bytes_read <= 0) break;  // End of input
-        buffer[bytes_read] = '\0';  // Null-terminate the input string
+        if (bytes_read <= 0) break;  // ends input
+        buffer[bytes_read] = '\0';  // NULL terminate string
 
-        tokens = tokenize_input(buffer);
-        if (tokens[0] == NULL) {  // Skip empty input
-            free_tokens(tokens);
+        tokens = inputToTokens(buffer);
+        if (tokens[0] == NULL) {  // skips empty input
+            freeTokens(tokens);
             continue;
         }
 
-        expand_wildcards(&tokens);
+        expandWildcards(&tokens);
 
         int pipe_index = -1;
         for (int i = 0; tokens[i] != NULL; i++) {
@@ -338,20 +352,20 @@ int main(int argc, char *argv[]) {
             tokens[pipe_index] = NULL;
             char **cmd1_tokens = tokens;
             char **cmd2_tokens = &tokens[pipe_index + 1];
-            execute_with_pipe(cmd1_tokens, cmd2_tokens);
+            executeWithPipe(cmd1_tokens, cmd2_tokens);
         } else if (strcmp(tokens[0], "cd") == 0) {
-            handle_cd(tokens);
+            handleCd(tokens);
         } else if (strcmp(tokens[0], "pwd") == 0) {
-            handle_pwd();
+            handlePwd();
         } else if (strcmp(tokens[0], "which") == 0) {
-            handle_which(tokens);
+            handleWhich(tokens);
         } else if (strcmp(tokens[0], "exit") == 0) {
-            handle_exit(tokens);
+            handleExit(tokens);
         } else {
-            execute_external_command(tokens);
+            executeExternalCommand(tokens);
         }
 
-        free_tokens(tokens);
+        freeTokens(tokens);
     }
 
     if (batch_mode) {
