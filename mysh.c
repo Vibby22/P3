@@ -16,6 +16,7 @@ void execute_external_command(char **tokens);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
 void handle_redirection(char **tokens, int *input_fd, int *output_fd);
+void handle_pipes(char **tokens);
 
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
@@ -141,6 +142,72 @@ void execute_external_command(char **tokens) {
     }
 }
 
+void handle_pipes(char **tokens) {
+    int pipe_fd[2];
+    int prev_read_end = -1;
+    int i = 0;
+
+    while (tokens[i] != NULL) {
+        char *current_command[BUFFER_SIZE];
+        int cmd_index = 0;
+
+        while (tokens[i] != NULL && strcmp(tokens[i], "|") != 0) {
+            current_command[cmd_index++] = tokens[i++];
+        }
+        current_command[cmd_index] = NULL;
+
+        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+            if (pipe(pipe_fd) < 0) {
+                perror("pipe");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {
+            if (prev_read_end != -1) {
+                if (dup2(prev_read_end, STDIN_FILENO) == -1) {
+                    perror("dup2");
+                    exit(EXIT_FAILURE);
+                }
+                close(prev_read_end);
+            }
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+                if (dup2(pipe_fd[1], STDOUT_FILENO) == -1) {
+                    perror("dup2");
+                    exit(EXIT_FAILURE);
+                }
+                close(pipe_fd[0]);
+                close(pipe_fd[1]);
+            }
+            if (execvp(current_command[0], current_command) == -1) {
+                perror("execvp");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            if (prev_read_end != -1) {
+                close(prev_read_end);
+            }
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+                prev_read_end = pipe_fd[0];
+                close(pipe_fd[1]);
+            }
+        }
+
+        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+            i++;
+        }
+    }
+
+    int status;
+    while (wait(&status) > 0);
+}
+
 char **tokenize_input(char *input) {
     int size = 10, index = 0;
     char **tokens = malloc(size * sizeof(char *));
@@ -185,11 +252,10 @@ int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
     char **tokens;
-    int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
-    int batch_mode = 0;                        // Flag for batch mode
-    int input_fd = STDIN_FILENO;               // Default to standard input
+    int is_interactive = isatty(STDIN_FILENO);
+    int batch_mode = 0;
+    int input_fd = STDIN_FILENO;
 
-    // Check for batch file input
     if (argc == 2) {
         batch_mode = 1;
         input_fd = open(argv[1], O_RDONLY);
@@ -197,7 +263,7 @@ int main(int argc, char *argv[]) {
             perror("open");
             exit(EXIT_FAILURE);
         }
-        is_interactive = 0;  // Batch mode disables interactive behavior
+        is_interactive = 0;
     } else if (argc > 2) {
         fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -218,29 +284,39 @@ int main(int argc, char *argv[]) {
             perror("read");
             break;
         } else if (bytes_read == 0) {
-            // End of input
             break;
         }
 
-        buffer[bytes_read] = '\0';  // Null-terminate the input string
-        tokens = tokenize_input(buffer);  // Tokenize the input
+        buffer[bytes_read] = '\0';
+        tokens = tokenize_input(buffer);
 
-        if (tokens[0] == NULL) {  // Skip empty input
+        if (tokens[0] == NULL) {
             free_tokens(tokens);
             continue;
         }
 
-        // Handle built-in commands or execute external commands
-        if (strcmp(tokens[0], "cd") == 0) {
-            handle_cd(tokens);
-        } else if (strcmp(tokens[0], "pwd") == 0) {
-            handle_pwd();
-        } else if (strcmp(tokens[0], "which") == 0) {
-            handle_which(tokens);
-        } else if (strcmp(tokens[0], "exit") == 0) {
-            handle_exit(tokens);
+        int contains_pipe = 0;
+        for (int j = 0; tokens[j] != NULL; j++) {
+            if (strcmp(tokens[j], "|") == 0) {
+                contains_pipe = 1;
+                break;
+            }
+        }
+
+        if (contains_pipe) {
+            handle_pipes(tokens);
         } else {
-            execute_external_command(tokens);
+            if (strcmp(tokens[0], "cd") == 0) {
+                handle_cd(tokens);
+            } else if (strcmp(tokens[0], "pwd") == 0) {
+                handle_pwd();
+            } else if (strcmp(tokens[0], "which") == 0) {
+                handle_which(tokens);
+            } else if (strcmp(tokens[0], "exit") == 0) {
+                handle_exit(tokens);
+            } else {
+                execute_external_command(tokens);
+            }
         }
 
         free_tokens(tokens);
