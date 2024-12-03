@@ -25,6 +25,7 @@ void handle_cd(char **tokens) {
     } else if (chdir(tokens[1]) != 0) {
         perror("cd");
     }
+    printf("\n");  // Add newline to separate outputs in batch mode
     fflush(stdout);
 }
 
@@ -33,7 +34,7 @@ void handle_pwd() {
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         perror("pwd");
     } else {
-        printf("%s\n", cwd);
+        printf("%s\n", cwd);  // Ensure a newline is included
     }
     fflush(stdout);
 }
@@ -48,7 +49,7 @@ void handle_which(char **tokens) {
         for (int i = 0; i < 3; i++) {
             snprintf(path, sizeof(path), "%s/%s", paths[i], tokens[1]);
             if (access(path, X_OK) == 0) {
-                printf("%s\n", path);
+                printf("%s\n", path);  // Ensure a newline is included
                 found = 1;
                 break;
             }
@@ -57,6 +58,7 @@ void handle_which(char **tokens) {
             fprintf(stderr, "which: command not found: %s\n", tokens[1]);
         }
     }
+    printf("\n");  // Add newline to separate outputs in batch mode
     fflush(stdout);
 }
 
@@ -338,6 +340,12 @@ int main(int argc, char *argv[]) {
         }
 
         free_tokens(tokens);
+
+        // Ensure newline after each command in batch mode
+        if (batch_mode) {
+            printf("\n");
+            fflush(stdout);
+        }
     }
 
     // If batch mode, exit after finishing
