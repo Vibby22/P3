@@ -175,6 +175,7 @@ void expand_wildcards(char ***tokens_ptr) {
                 }
                 globfree(&glob_result);
             }
+            free(tokens[i]);  // Free the original token replaced by wildcard expansion
         } else {
             expanded_tokens[index++] = strdup(tokens[i]);
             if (index >= new_size) {
@@ -191,7 +192,7 @@ void expand_wildcards(char ***tokens_ptr) {
     expanded_tokens[index] = NULL;
 
     // Free the old tokens
-    free_tokens(tokens);
+    free(tokens);
 
     // Replace the tokens pointer with the expanded version
     *tokens_ptr = expanded_tokens;
