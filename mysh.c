@@ -25,7 +25,7 @@ void handle_cd(char **tokens) {
     } else if (chdir(tokens[1]) != 0) {
         perror("cd");
     }
-    printf("\n");  // Add newline to separate outputs in batch mode
+    printf("\n");
     fflush(stdout);
 }
 
@@ -34,7 +34,7 @@ void handle_pwd() {
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         perror("pwd");
     } else {
-        printf("%s\n", cwd);  // Ensure a newline is included
+        printf("%s\n", cwd);
     }
     fflush(stdout);
 }
@@ -49,7 +49,7 @@ void handle_which(char **tokens) {
         for (int i = 0; i < 3; i++) {
             snprintf(path, sizeof(path), "%s/%s", paths[i], tokens[1]);
             if (access(path, X_OK) == 0) {
-                printf("%s\n", path);  // Ensure a newline is included
+                printf("%s\n", path);
                 found = 1;
                 break;
             }
@@ -58,7 +58,7 @@ void handle_which(char **tokens) {
             fprintf(stderr, "which: command not found: %s\n", tokens[1]);
         }
     }
-    printf("\n");  // Add newline to separate outputs in batch mode
+    printf("\n");
     fflush(stdout);
 }
 
@@ -293,58 +293,99 @@ int main(int argc, char *argv[]) {
             fflush(stdout);
         }
 
-        bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-        if (bytes_read < 0) {
-            perror("read");
-            break;
-        } else if (bytes_read == 0) {
-            // End of input (e.g., EOF or batch file completed)
-            break;
-        }
+        // Read input line by line in batch mode
+        if (batch_mode) {
+            bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
+            if (bytes_read <= 0) {
+                break;  // End of input or error
+            }
 
-        buffer[bytes_read] = '\0';
-        tokens = tokenize_input(buffer);
+            buffer[bytes_read] = '\0';
+            char *line = strtok(buffer, "\n");
+            while (line != NULL) {
+                tokens = tokenize_input(line);
+                expand_wildcards(&tokens);
 
-        // Expand any wildcards in the tokens
-        expand_wildcards(&tokens);
+                if (tokens[0] != NULL) {
+                    int contains_pipe = 0;
+                    for (int j = 0; tokens[j] != NULL; j++) {
+                        if (strcmp(tokens[j], "|") == 0) {
+                            contains_pipe = 1;
+                            break;
+                        }
+                    }
 
-        if (tokens[0] == NULL) {  // Skip empty input
-            free_tokens(tokens);
-            continue;
-        }
+                    if (contains_pipe) {
+                        handle_pipes(tokens);
+                    } else {
+                        if (strcmp(tokens[0], "cd") == 0) {
+                            handle_cd(tokens);
+                        } else if (strcmp(tokens[0], "pwd") == 0) {
+                            handle_pwd();
+                        } else if (strcmp(tokens[0], "which") == 0) {
+                            handle_which(tokens);
+                        } else if (strcmp(tokens[0], "exit") == 0) {
+                            handle_exit(tokens);
+                        } else {
+                            execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+                        }
+                    }
+                }
 
-        // Handle pipes if present
-        int contains_pipe = 0;
-        for (int j = 0; tokens[j] != NULL; j++) {
-            if (strcmp(tokens[j], "|") == 0) {
-                contains_pipe = 1;
+                free_tokens(tokens);
+                line = strtok(NULL, "\n");
+                if (batch_mode) {
+                    printf("\n");
+                    fflush(stdout);
+                }
+            }
+        } else {
+            bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
+            if (bytes_read < 0) {
+                perror("read");
+                break;
+            } else if (bytes_read == 0) {
+                // End of input
                 break;
             }
-        }
 
-        if (contains_pipe) {
-            handle_pipes(tokens);
-        } else {
-            // No pipes, execute a single command
-            if (strcmp(tokens[0], "cd") == 0) {
-                handle_cd(tokens);
-            } else if (strcmp(tokens[0], "pwd") == 0) {
-                handle_pwd();
-            } else if (strcmp(tokens[0], "which") == 0) {
-                handle_which(tokens);
-            } else if (strcmp(tokens[0], "exit") == 0) {
-                handle_exit(tokens);
-            } else {
-                execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+            buffer[bytes_read] = '\0';
+            tokens = tokenize_input(buffer);
+
+            // Expand any wildcards in the tokens
+            expand_wildcards(&tokens);
+
+            if (tokens[0] == NULL) {  // Skip empty input
+                free_tokens(tokens);
+                continue;
             }
-        }
 
-        free_tokens(tokens);
+            // Handle pipes if present
+            int contains_pipe = 0;
+            for (int j = 0; tokens[j] != NULL; j++) {
+                if (strcmp(tokens[j], "|") == 0) {
+                    contains_pipe = 1;
+                    break;
+                }
+            }
 
-        // Ensure newline after each command in batch mode
-        if (batch_mode) {
-            printf("\n");
-            fflush(stdout);
+            if (contains_pipe) {
+                handle_pipes(tokens);
+            } else {
+                if (strcmp(tokens[0], "cd") == 0) {
+                    handle_cd(tokens);
+                } else if (strcmp(tokens[0], "pwd") == 0) {
+                    handle_pwd();
+                } else if (strcmp(tokens[0], "which") == 0) {
+                    handle_which(tokens);
+                } else if (strcmp(tokens[0], "exit") == 0) {
+                    handle_exit(tokens);
+                } else {
+                    execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+                }
+            }
+
+            free_tokens(tokens);
         }
     }
 
