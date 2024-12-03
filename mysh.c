@@ -18,6 +18,7 @@ char **tokenize_input(char *input);
 void free_tokens(char **tokens);
 void handle_pipes(char **tokens);
 void expand_wildcards(char ***tokens_ptr);
+void handle_redirection(char** tokens, int *input_fd, int *output_fd);
 
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
@@ -71,7 +72,72 @@ void handle_exit(char **tokens) {
     exit(0);
 }
 
+void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
+    // Iterate through tokens to find redirection symbols
+    for (int i = 0; tokens[i] != NULL; i++) {
+        if (strcmp(tokens[i], "<") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for input redirection\n");
+                return;
+            }
+            *input_fd = open(tokens[i + 1], O_RDONLY);
+            if (*input_fd < 0) {
+                perror("open input file");
+                return;
+            }
+            free(tokens[i]);
+            free(tokens[i + 1]);
+            tokens[i] = NULL;  // Mark as removed
+            tokens[i + 1] = NULL;
+        } else if (strcmp(tokens[i], ">") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for output redirection\n");
+                return;
+            }
+            *output_fd = open(tokens[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+            if (*output_fd < 0) {
+                perror("open output file");
+                return;
+            }
+            free(tokens[i]);
+            free(tokens[i + 1]);
+            tokens[i] = NULL;  // Mark as removed
+            tokens[i + 1] = NULL;
+        } else if (strcmp(tokens[i], ">>") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for output redirection\n");
+                return;
+            }
+            *output_fd = open(tokens[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0640);
+            if (*output_fd < 0) {
+                perror("open output file");
+                return;
+            }
+            free(tokens[i]);
+            free(tokens[i + 1]);
+            tokens[i] = NULL;  // Mark as removed
+            tokens[i + 1] = NULL;
+        }
+    }
+
+    // Compact the tokens array to remove NULLs left by redirection removal
+    int j = 0;
+    for (int i = 0; tokens[i] != NULL || tokens[i + 1] != NULL; i++) {
+        if (tokens[i] != NULL) {
+            tokens[j++] = tokens[i];
+        }
+    }
+    tokens[j] = NULL;
+}
+
 void execute_external_command(char **tokens, int input_fd, int output_fd) {
+    // Initialize file descriptors for redirection
+    input_fd = STDIN_FILENO;
+    output_fd = STDOUT_FILENO;
+
+    handle_redirection(tokens, &input_fd, &output_fd);
+
+    // Fork a new process to execute the command
     pid_t pid = fork();
 
     if (pid < 0) {
@@ -80,16 +146,16 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
     }
 
     if (pid == 0) {  // Child process
-        if (input_fd != STDIN_FILENO) {  // Redirect input
+        if (input_fd != STDIN_FILENO) {  // Redirect input if needed
             if (dup2(input_fd, STDIN_FILENO) == -1) {
-                perror("dup2");
+                perror("dup2 input");
                 exit(EXIT_FAILURE);
             }
             close(input_fd);
         }
-        if (output_fd != STDOUT_FILENO) {  // Redirect output
+        if (output_fd != STDOUT_FILENO) {  // Redirect output if needed
             if (dup2(output_fd, STDOUT_FILENO) == -1) {
-                perror("dup2");
+                perror("dup2 output");
                 exit(EXIT_FAILURE);
             }
             close(output_fd);
@@ -100,9 +166,9 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
         }
     } else {  // Parent process
         int status;
-        waitpid(pid, &status, 0);  // Wait for the child process to complete
+        waitpid(pid, &status, 0);
 
-        // Ensure all descriptors are properly closed after execution
+        // Close the file descriptors only if they were changed
         if (input_fd != STDIN_FILENO) {
             close(input_fd);
         }
@@ -111,6 +177,7 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
         }
     }
 }
+
 
 void handle_pipes(char **tokens) {
     int pipe_fd[2];
