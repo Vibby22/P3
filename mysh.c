@@ -254,6 +254,7 @@ int main(int argc, char *argv[]) {
     char **tokens;
     int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
     int input_fd = STDIN_FILENO;               // Default to standard input
+    int batch_mode = 0;
 
     // Check for batch file input
     if (argc == 2) {
@@ -263,6 +264,7 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
         is_interactive = 0;  // Batch mode disables interactive behavior
+        batch_mode = 1;      // Set batch mode flag
     } else if (argc > 2) {
         fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -284,14 +286,7 @@ int main(int argc, char *argv[]) {
             break;
         } else if (bytes_read == 0) {
             // End of input (e.g., EOF or batch file completed)
-            if (input_fd != STDIN_FILENO) {
-                close(input_fd);
-                input_fd = STDIN_FILENO; // Return to interactive mode if batch file is finished
-                is_interactive = 1;      // Set the mode back to interactive
-                continue;                // Prompt the user for input again
-            } else {
-                break;
-            }
+            break;
         }
 
         buffer[bytes_read] = '\0';
@@ -332,6 +327,12 @@ int main(int argc, char *argv[]) {
         }
 
         free_tokens(tokens);
+    }
+
+    // If batch mode, exit after finishing
+    if (batch_mode) {
+        close(input_fd);
+        exit(0);
     }
 
     if (is_interactive) {
