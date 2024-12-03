@@ -231,79 +231,68 @@ void handle_exit(char **tokens) {
     exit(0);
 }
 
-int main(int argc, char *argv[]) {
-    char buffer[BUFFER_SIZE];
-    ssize_t bytes_read;
-    char **tokens;
-    int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
-    int input_fd = STDIN_FILENO;               // Default to standard input
-
-    // Check for batch file input
-    if (argc == 2) {
-        input_fd = open(argv[1], O_RDONLY);
-        if (input_fd < 0) {
-            perror("open");
-            exit(EXIT_FAILURE);
-        }
-        is_interactive = 0;  // Batch mode disables interactive behavior
-    } else if (argc > 2) {
-        fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
+while (1) {
     if (is_interactive) {
-        printf("Welcome to my shell!\n");
+        printf("mysh> ");
+        fflush(stdout);
     }
 
-    while (1) {
-        if (is_interactive) {
-            printf("mysh> ");
-            fflush(stdout);
-        }
-
-        bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-        if (bytes_read <= 0) break;
-
-        buffer[bytes_read] = '\0';
-        tokens = tokenize_input(buffer);
-
-        // Expand any wildcards in the tokens
-        expand_wildcards(&tokens);
-
-        if (tokens[0] == NULL) {  // Skip empty input
-            free_tokens(tokens);
-            continue;
-        }
-
-        // Handle pipes if present
-        int contains_pipe = 0;
-        for (int j = 0; tokens[j] != NULL; j++) {
-            if (strcmp(tokens[j], "|") == 0) {
-                contains_pipe = 1;
-                break;
-            }
-        }
-
-        if (contains_pipe) {
-            handle_pipes(tokens);
+    bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
+    if (bytes_read < 0) {
+        perror("read");
+        break;
+    } else if (bytes_read == 0) {
+        // End of input (e.g., EOF or batch file completed)
+        if (input_fd != STDIN_FILENO) {
+            close(input_fd);
+            input_fd = STDIN_FILENO; // Return to interactive mode if batch file is finished
+            is_interactive = 1;      // Set the mode back to interactive
+            continue;                // Prompt the user for input again
         } else {
-            // No pipes, execute a single command
-            if (strcmp(tokens[0], "cd") == 0) {
-                handle_cd(tokens);
-            } else if (strcmp(tokens[0], "pwd") == 0) {
-                handle_pwd();
-            } else if (strcmp(tokens[0], "which") == 0) {
-                handle_which(tokens);
-            } else if (strcmp(tokens[0], "exit") == 0) {
-                handle_exit(tokens);
-            } else {
-                execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
-            }
+            break;
         }
-
-        free_tokens(tokens);
     }
 
-    if (is_interactive) printf("Exiting my shell.\n");
-    return 0;
+    buffer[bytes_read] = '\0';
+    tokens = tokenize_input(buffer);
+
+    // Expand any wildcards in the tokens
+    expand_wildcards(&tokens);
+
+    if (tokens[0] == NULL) {  // Skip empty input
+        free_tokens(tokens);
+        continue;
+    }
+
+    // Handle pipes if present
+    int contains_pipe = 0;
+    for (int j = 0; tokens[j] != NULL; j++) {
+        if (strcmp(tokens[j], "|") == 0) {
+            contains_pipe = 1;
+            break;
+        }
+    }
+
+    if (contains_pipe) {
+        handle_pipes(tokens);
+    } else {
+        // No pipes, execute a single command
+        if (strcmp(tokens[0], "cd") == 0) {
+            handle_cd(tokens);
+        } else if (strcmp(tokens[0], "pwd") == 0) {
+            handle_pwd();
+        } else if (strcmp(tokens[0], "which") == 0) {
+            handle_which(tokens);
+        } else if (strcmp(tokens[0], "exit") == 0) {
+            handle_exit(tokens);
+        } else {
+            execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+        }
+    }
+
+    free_tokens(tokens);
+}
+
+if (is_interactive) {
+    printf("Exiting my shell.\n");
 }
