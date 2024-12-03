@@ -294,7 +294,10 @@ void expand_wildcards(char ***tokens_ptr) {
 
     expanded_tokens[index] = NULL;
 
+    // Free the old tokens
     free_tokens(tokens);
+
+    // Replace the tokens pointer with the expanded version
     *tokens_ptr = expanded_tokens;
 }
 
