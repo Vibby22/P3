@@ -1,36 +1,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>  // For isatty(), chdir(), fork(), execvp(), dup2()
-#include <fcntl.h>   // For open()
-#include <sys/wait.h>  // For wait()
-#include <glob.h>    // For wildcard expansion
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <glob.h>
 
 #define BUFFER_SIZE 1024
 
 // Function prototypes
 void handle_cd(char **tokens);
 void handle_pwd();
-void handle_which(char **tokens);
 void handle_exit(char **tokens);
-void execute_external_command(char **tokens, int input_fd, int output_fd);
+void execute_command(char **tokens);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
-void handle_pipes(char **tokens);
 void expand_wildcards(char ***tokens_ptr);
-int handle_redirection(char **tokens, int *output_fd);
+int handle_redirection(char **tokens, int *input_fd, int *output_fd);
+void handle_pipes(char **tokens);
 
-// Function to handle changing the current directory
+// Function to change directory
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
         fprintf(stderr, "cd: missing argument\n");
     } else if (chdir(tokens[1]) != 0) {
         perror("cd");
     }
-    fflush(stdout);
 }
 
-// Function to handle printing the current working directory
+// Function to print current working directory
 void handle_pwd() {
     char cwd[BUFFER_SIZE];
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
@@ -38,118 +36,18 @@ void handle_pwd() {
     } else {
         printf("%s\n", cwd);
     }
-    fflush(stdout);
 }
 
-// Function to locate executable files
-void handle_which(char **tokens) {
-    if (tokens[1] == NULL) {
-        fprintf(stderr, "which: missing argument\n");
-    } else {
-        const char *paths[] = {"/usr/local/bin", "/usr/bin", "/bin"};
-        char path[BUFFER_SIZE];
-        int found = 0;
-        for (int i = 0; i < 3; i++) {
-            snprintf(path, sizeof(path), "%s/%s", paths[i], tokens[1]);
-            if (access(path, X_OK) == 0) {
-                printf("%s\n", path);
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            fprintf(stderr, "which: command not found: %s\n", tokens[1]);
-        }
-    }
-    fflush(stdout);
-}
-
-// Function to handle exiting the shell
+// Function to handle exit
 void handle_exit(char **tokens) {
     if (tokens[1] != NULL) {
         printf("Exiting with message: %s\n", tokens[1]);
     }
-    fflush(stdout);
     free_tokens(tokens);
     exit(0);
 }
 
-// Function to handle I/O redirection
-int handle_redirection(char **tokens, int *output_fd) {
-    for (int i = 0; tokens[i] != NULL; i++) {
-        if (strcmp(tokens[i], ">") == 0) {
-            if (tokens[i + 1] == NULL) {
-                fprintf(stderr, "Syntax error: no file specified for output redirection\n");
-                return -1;
-            }
-
-            *output_fd = open(tokens[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (*output_fd < 0) {
-                perror("open");
-                return -1;
-            }
-
-            free(tokens[i]);
-            free(tokens[i + 1]);
-            tokens[i] = NULL;
-            tokens[i + 1] = NULL;
-
-            return 1;
-        }
-    }
-    return 0;
-}
-
-// Function to execute external commands
-void execute_external_command(char **tokens, int input_fd, int output_fd) {
-    int redirection = handle_redirection(tokens, &output_fd);
-    if (redirection == -1) {
-        return; // Error in handling redirection
-    }
-
-    // Compact the tokens array to remove NULLs left by redirection removal
-    int j = 0;
-    for (int i = 0; tokens[i] != NULL; i++) {
-        if (tokens[i] != NULL) {
-            tokens[j++] = tokens[i];
-        }
-    }
-    tokens[j] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        return;
-    }
-
-    if (pid == 0) {  // Child process
-        if (input_fd != STDIN_FILENO) {
-            if (dup2(input_fd, STDIN_FILENO) == -1) {
-                perror("dup2");
-                exit(EXIT_FAILURE);
-            }
-            close(input_fd);
-        }
-        if (output_fd != STDOUT_FILENO) {
-            if (dup2(output_fd, STDOUT_FILENO) == -1) {
-                perror("dup2");
-                exit(EXIT_FAILURE);
-            }
-            close(output_fd);
-        }
-        if (execvp(tokens[0], tokens) == -1) {
-            perror("execvp");
-            exit(EXIT_FAILURE);
-        }
-    } else {  // Parent process
-        int status;
-        waitpid(pid, &status, 0);  // Wait for the child process to complete
-        if (input_fd != STDIN_FILENO) close(input_fd);
-        if (output_fd != STDOUT_FILENO) close(output_fd);
-    }
-}
-
-// Function to expand wildcards in commands
+// Function to expand wildcards in tokens
 void expand_wildcards(char ***tokens_ptr) {
     char **tokens = *tokens_ptr;
     int new_size = 10, index = 0;
@@ -159,67 +57,106 @@ void expand_wildcards(char ***tokens_ptr) {
         exit(EXIT_FAILURE);
     }
 
-    // List of files to exclude during wildcard expansion
-    const char *exclusion_list[] = {"Makefile", NULL};
-
     for (int i = 0; tokens[i] != NULL; i++) {
-        if (strchr(tokens[i], '*') || strchr(tokens[i], '?') || strchr(tokens[i], '[')) {
+        if (strchr(tokens[i], '*') || strchr(tokens[i], '?')) {
             glob_t glob_result;
-            if (glob(tokens[i], GLOB_NOCHECK, NULL, &glob_result) == 0) {
+            if (glob(tokens[i], 0, NULL, &glob_result) == 0) {
                 for (size_t j = 0; j < glob_result.gl_pathc; j++) {
-                    int is_excluded = 0;
-                    for (int k = 0; exclusion_list[k] != NULL; k++) {
-                        if (strcmp(glob_result.gl_pathv[j], exclusion_list[k]) == 0) {
-                            is_excluded = 1;
-                            break;
-                        }
-                    }
-
-                    if (!is_excluded) {
-                        expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
-                        if (index >= new_size) {
-                            new_size *= 2;
-                            expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
-                            if (!expanded_tokens) {
-                                perror("realloc");
-                                exit(EXIT_FAILURE);
-                            }
+                    expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
+                    if (index >= new_size) {
+                        new_size *= 2;
+                        expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
+                        if (!expanded_tokens) {
+                            perror("realloc");
+                            exit(EXIT_FAILURE);
                         }
                     }
                 }
                 globfree(&glob_result);
             }
-            free(tokens[i]);  // Free the original token replaced by wildcard expansion
+            free(tokens[i]);
         } else {
             expanded_tokens[index++] = strdup(tokens[i]);
-            if (index >= new_size) {
-                new_size *= 2;
-                expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
-                if (!expanded_tokens) {
-                    perror("realloc");
-                    exit(EXIT_FAILURE);
-                }
-            }
         }
     }
 
     expanded_tokens[index] = NULL;
-
-    // Free the old tokens
     free(tokens);
-
-    // Replace the tokens pointer with the expanded version
     *tokens_ptr = expanded_tokens;
 }
 
-// Function to free memory allocated for tokens
-void free_tokens(char **tokens) {
-    if (!tokens) return;
-
+// Function to handle I/O redirection
+int handle_redirection(char **tokens, int *input_fd, int *output_fd) {
     for (int i = 0; tokens[i] != NULL; i++) {
-        free(tokens[i]);
+        if (strcmp(tokens[i], "<") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for input redirection\n");
+                return -1;
+            }
+            *input_fd = open(tokens[i + 1], O_RDONLY);
+            if (*input_fd < 0) {
+                perror("open");
+                return -1;
+            }
+            free(tokens[i]);
+            free(tokens[i + 1]);
+            tokens[i] = NULL;
+            tokens[i + 1] = NULL;
+        } else if (strcmp(tokens[i], ">") == 0 || strcmp(tokens[i], ">>") == 0) {
+            if (tokens[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: no file specified for output redirection\n");
+                return -1;
+            }
+            int flags = O_WRONLY | O_CREAT;
+            if (strcmp(tokens[i], ">") == 0) {
+                flags |= O_TRUNC;
+            } else {
+                flags |= O_APPEND;
+            }
+            *output_fd = open(tokens[i + 1], flags, 0644);
+            if (*output_fd < 0) {
+                perror("open");
+                return -1;
+            }
+            free(tokens[i]);
+            free(tokens[i + 1]);
+            tokens[i] = NULL;
+            tokens[i + 1] = NULL;
+        }
     }
-    free(tokens);
+    return 0;
+}
+
+// Function to execute commands
+void execute_command(char **tokens) {
+    int input_fd = STDIN_FILENO, output_fd = STDOUT_FILENO;
+    handle_redirection(tokens, &input_fd, &output_fd);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return;
+    }
+
+    if (pid == 0) {  // Child process
+        if (input_fd != STDIN_FILENO) {
+            dup2(input_fd, STDIN_FILENO);
+            close(input_fd);
+        }
+        if (output_fd != STDOUT_FILENO) {
+            dup2(output_fd, STDOUT_FILENO);
+            close(output_fd);
+        }
+        if (execvp(tokens[0], tokens) == -1) {
+            perror("execvp");
+            exit(EXIT_FAILURE);
+        }
+    } else {  // Parent process
+        int status;
+        waitpid(pid, &status, 0);
+        if (input_fd != STDIN_FILENO) close(input_fd);
+        if (output_fd != STDOUT_FILENO) close(output_fd);
+    }
 }
 
 // Function to handle pipes
@@ -229,7 +166,6 @@ void handle_pipes(char **tokens) {
     int i = 0;
 
     while (tokens[i] != NULL) {
-        // Collect tokens for the current command
         char *current_command[BUFFER_SIZE];
         int cmd_index = 0;
 
@@ -238,7 +174,6 @@ void handle_pipes(char **tokens) {
         }
         current_command[cmd_index] = NULL;
 
-        // Create a pipe if there is a next command
         if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
             if (pipe(pipe_fd) < 0) {
                 perror("pipe");
@@ -246,7 +181,6 @@ void handle_pipes(char **tokens) {
             }
         }
 
-        // Fork a new process to execute the current command
         pid_t pid = fork();
         if (pid < 0) {
             perror("fork");
@@ -254,18 +188,12 @@ void handle_pipes(char **tokens) {
         }
 
         if (pid == 0) {  // Child process
-            if (prev_fd != -1) {  // Redirect input from the previous pipe
-                if (dup2(prev_fd, STDIN_FILENO) == -1) {
-                    perror("dup2");
-                    exit(EXIT_FAILURE);
-                }
+            if (prev_fd != -1) {
+                dup2(prev_fd, STDIN_FILENO);
                 close(prev_fd);
             }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {  // Redirect output to the current pipe
-                if (dup2(pipe_fd[1], STDOUT_FILENO) == -1) {
-                    perror("dup2");
-                    exit(EXIT_FAILURE);
-                }
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+                dup2(pipe_fd[1], STDOUT_FILENO);
                 close(pipe_fd[0]);
                 close(pipe_fd[1]);
             }
@@ -274,27 +202,23 @@ void handle_pipes(char **tokens) {
                 exit(EXIT_FAILURE);
             }
         } else {  // Parent process
-            if (prev_fd != -1) {
-                close(prev_fd);
-            }
+            if (prev_fd != -1) close(prev_fd);
             if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
                 prev_fd = pipe_fd[0];
                 close(pipe_fd[1]);
             }
         }
 
-        // Move to the next token after '|'
         if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
             i++;
         }
     }
 
-    // Wait for all child processes to complete
     int status;
     while (wait(&status) > 0);
 }
 
-// Function to tokenize input commands
+// Function to tokenize input
 char **tokenize_input(char *input) {
     int size = 10, index = 0;
     char **tokens = malloc(size * sizeof(char *));
@@ -303,7 +227,8 @@ char **tokenize_input(char *input) {
         exit(EXIT_FAILURE);
     }
 
-    char *token = strtok(input, " \t\n");
+    char *token = strtok(input, " 	
+");
     while (token != NULL) {
         tokens[index++] = strdup(token);
         if (index >= size) {
@@ -314,51 +239,38 @@ char **tokenize_input(char *input) {
                 exit(EXIT_FAILURE);
             }
         }
-        token = strtok(NULL, " \t\n");
+        token = strtok(NULL, " 	
+");
     }
     tokens[index] = NULL;
     return tokens;
 }
 
+// Function to free tokens
+void free_tokens(char **tokens) {
+    if (!tokens) return;
+    for (int i = 0; tokens[i] != NULL; i++) {
+        free(tokens[i]);
+    }
+    free(tokens);
+}
+
 // Main function
-int main(int argc, char *argv[]) {
+int main() {
     char buffer[BUFFER_SIZE];
     char **tokens;
-    FILE *batch_file = NULL;
-    int is_interactive = isatty(STDIN_FILENO);
 
-    if (argc == 2) {
-        batch_file = fopen(argv[1], "r");
-        if (!batch_file) {
-            perror("fopen");
-            exit(EXIT_FAILURE);
-        }
-        is_interactive = 0;
-    } else if (argc > 2) {
-        fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
-    if (is_interactive) {
-        printf("Welcome to my shell!\n");
-        fflush(stdout);
-    }
+    printf("Welcome to my shell!\n");
+    fflush(stdout);
 
     while (1) {
-        if (is_interactive) {
-            printf("mysh> ");
-            fflush(stdout);
-            if (!fgets(buffer, BUFFER_SIZE, stdin)) {
-                break;  // End of input
-            }
-        } else if (batch_file) {
-            if (!fgets(buffer, BUFFER_SIZE, batch_file)) {
-                break;  // End of file
-            }
+        printf("mysh> ");
+        fflush(stdout);
+        if (!fgets(buffer, BUFFER_SIZE, stdin)) {
+            break;
         }
 
         buffer[strcspn(buffer, "\n")] = '\0';
-
         tokens = tokenize_input(buffer);
         expand_wildcards(&tokens);
 
@@ -382,25 +294,16 @@ int main(int argc, char *argv[]) {
                 handle_cd(tokens);
             } else if (strcmp(tokens[0], "pwd") == 0) {
                 handle_pwd();
-            } else if (strcmp(tokens[0], "which") == 0) {
-                handle_which(tokens);
             } else if (strcmp(tokens[0], "exit") == 0) {
                 handle_exit(tokens);
             } else {
-                execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+                execute_command(tokens);
             }
         }
 
         free_tokens(tokens);
     }
 
-    if (batch_file) {
-        fclose(batch_file);
-        exit(0);
-    }
-
-    if (is_interactive) {
-        printf("Exiting my shell.\n");
-    }
+    printf("Exiting my shell.\n");
     return 0;
 }
