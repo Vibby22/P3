@@ -12,10 +12,11 @@ void handle_cd(char **tokens);
 void handle_pwd();
 void handle_which(char **tokens);
 void handle_exit(char **tokens);
-void execute_external_command(char **tokens);
+void execute_external_command(char **tokens, int input_fd, int output_fd);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
 void handle_redirection(char **tokens, int *input_fd, int *output_fd);
+void handle_pipes(char **tokens);
 
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
@@ -55,38 +56,7 @@ void handle_which(char **tokens) {
     fprintf(stderr, "which: command not found: %s\n", tokens[1]);
 }
 
-void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
-    for (int i = 0; tokens[i] != NULL; i++) {
-        if (strcmp(tokens[i], "<") == 0) {
-            if (tokens[i + 1] == NULL) {
-                fprintf(stderr, "Syntax error: no file specified for input redirection\n");
-                return;
-            }
-            *input_fd = open(tokens[i + 1], O_RDONLY);
-            if (*input_fd < 0) {
-                perror("open input file");
-                return;
-            }
-            tokens[i] = NULL;  // Remove < and the file name from tokens
-        } else if (strcmp(tokens[i], ">") == 0) {
-            if (tokens[i + 1] == NULL) {
-                fprintf(stderr, "Syntax error: no file specified for output redirection\n");
-                return;
-            }
-            *output_fd = open(tokens[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
-            if (*output_fd < 0) {
-                perror("open output file");
-                return;
-            }
-            tokens[i] = NULL;  // Remove > and the file name from tokens
-        }
-    }
-}
-
-void execute_external_command(char **tokens) {
-    int input_fd = -1, output_fd = -1;
-    handle_redirection(tokens, &input_fd, &output_fd);
-
+void execute_external_command(char **tokens, int input_fd, int output_fd) {
     pid_t pid = fork();
 
     if (pid < 0) {
@@ -94,44 +64,92 @@ void execute_external_command(char **tokens) {
         return;
     }
 
-    if (pid == 0) {
-        // Child process
-        if (input_fd != -1) {
-            if (dup2(input_fd, STDIN_FILENO) == -1) {
-                perror("dup2 input");
-                exit(EXIT_FAILURE);
-            }
+    if (pid == 0) {  // Child process
+        if (input_fd != STDIN_FILENO) {  // Redirect input
+            dup2(input_fd, STDIN_FILENO);
             close(input_fd);
         }
-        if (output_fd != -1) {
-            if (dup2(output_fd, STDOUT_FILENO) == -1) {
-                perror("dup2 output");
-                exit(EXIT_FAILURE);
-            }
+        if (output_fd != STDOUT_FILENO) {  // Redirect output
+            dup2(output_fd, STDOUT_FILENO);
             close(output_fd);
         }
-
-        // Use execvp to search for the command in PATH
         if (execvp(tokens[0], tokens) == -1) {
             perror("execvp");
             exit(EXIT_FAILURE);
         }
-    } else {
-        // Parent process
+    } else {  // Parent process
         int status;
         if (wait(&status) == -1) {
             perror("wait");
-        } else {
-            if (WIFEXITED(status)) {
-                if (WEXITSTATUS(status) != 0) {
-                    fprintf(stderr, "Command failed with code %d\n", WEXITSTATUS(status));
-                }
-            } else if (WIFSIGNALED(status)) {
-                fprintf(stderr, "Terminated by signal: %d\n", WTERMSIG(status));
+        } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            fprintf(stderr, "Command failed with code %d\n", WEXITSTATUS(status));
+        }
+    }
+}
+
+void handle_pipes(char **tokens) {
+    int pipe_fd[2];
+    int prev_read_end = -1;
+    int i = 0;
+
+    while (i < BUFFER_SIZE && tokens[i] != NULL) {
+        // Collect tokens for the current command
+        char *current_command[BUFFER_SIZE];
+        int cmd_index = 0;
+
+        while (tokens[i] != NULL && strcmp(tokens[i], "|") != 0) {
+            current_command[cmd_index++] = tokens[i++];
+        }
+        current_command[cmd_index] = NULL;
+
+        // Create a pipe if there is a next command
+        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+            if (pipe(pipe_fd) < 0) {
+                perror("pipe");
+                exit(EXIT_FAILURE);
             }
         }
-        if (input_fd != -1) close(input_fd);
-        if (output_fd != -1) close(output_fd);
+
+        // Fork a new process to execute the current command
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        }
+
+        if (pid == 0) {  // Child process
+            if (prev_read_end != -1) {
+                dup2(prev_read_end, STDIN_FILENO);
+                close(prev_read_end);
+            }
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+                dup2(pipe_fd[1], STDOUT_FILENO);
+                close(pipe_fd[0]);
+                close(pipe_fd[1]);
+            }
+            if (execvp(current_command[0], current_command) == -1) {
+                perror("execvp");
+                exit(EXIT_FAILURE);
+            }
+        } else {  // Parent process
+            if (prev_read_end != -1) {
+                close(prev_read_end);
+            }
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+                prev_read_end = pipe_fd[0];
+                close(pipe_fd[1]);
+            }
+        }
+
+        // Move to the next token after '|'
+        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+            i++;
+        }
+    }
+
+    // Wait for all child processes to complete
+    for (int j = 0; j < i; j++) {
+        wait(NULL);
     }
 }
 
@@ -208,45 +226,45 @@ int main(int argc, char *argv[]) {
         }
 
         bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-        if (bytes_read < 0) {
-            perror("read");
-            break;
-        } else if (bytes_read == 0) {
-            // End of input
-            break;
-        }
+        if (bytes_read <= 0) break;
 
-        buffer[bytes_read] = '\0';  // Null-terminate the input string
-        tokens = tokenize_input(buffer);  // Tokenize the input
+        buffer[bytes_read] = '\0';
+        tokens = tokenize_input(buffer);
 
         if (tokens[0] == NULL) {  // Skip empty input
             free_tokens(tokens);
             continue;
         }
 
-        // Handle built-in commands or execute external commands
-        if (strcmp(tokens[0], "cd") == 0) {
-            handle_cd(tokens);
-        } else if (strcmp(tokens[0], "pwd") == 0) {
-            handle_pwd();
-        } else if (strcmp(tokens[0], "which") == 0) {
-            handle_which(tokens);
-        } else if (strcmp(tokens[0], "exit") == 0) {
-            handle_exit(tokens);
+        // Handle pipes if present
+        int contains_pipe = 0;
+        for (int j = 0; tokens[j] != NULL; j++) {
+            if (strcmp(tokens[j], "|") == 0) {
+                contains_pipe = 1;
+                break;
+            }
+        }
+
+        if (contains_pipe) {
+            handle_pipes(tokens);
         } else {
-            execute_external_command(tokens);
+            // No pipes, execute a single command
+            if (strcmp(tokens[0], "cd") == 0) {
+                handle_cd(tokens);
+            } else if (strcmp(tokens[0], "pwd") == 0) {
+                handle_pwd();
+            } else if (strcmp(tokens[0], "which") == 0) {
+                handle_which(tokens);
+            } else if (strcmp(tokens[0], "exit") == 0) {
+                handle_exit(tokens);
+            } else {
+                execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+            }
         }
 
         free_tokens(tokens);
     }
 
-    if (batch_mode) {
-        close(input_fd);
-    }
-
-    if (is_interactive) {
-        printf("Exiting my shell.\n");
-    }
-
+    if (is_interactive) printf("Exiting my shell.\n");
     return 0;
 }
