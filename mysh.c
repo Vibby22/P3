@@ -67,16 +67,33 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
 
     if (pid == 0) {  // Child process
         if (input_fd != STDIN_FILENO) {  // Redirect input
-            dup2(input_fd, STDIN_FILENO);
+            if (dup2(input_fd, STDIN_FILENO) == -1) {
+                perror("dup2");
+                exit(EXIT_FAILURE);
+            }
             close(input_fd);
         }
         if (output_fd != STDOUT_FILENO) {  // Redirect output
-            dup2(output_fd, STDOUT_FILENO);
+            if (dup2(output_fd, STDOUT_FILENO) == -1) {
+                perror("dup2");
+                exit(EXIT_FAILURE);
+            }
             close(output_fd);
         }
         if (execvp(tokens[0], tokens) == -1) {
             perror("execvp");
             exit(EXIT_FAILURE);
+        }
+    } else {  // Parent process
+        int status;
+        waitpid(pid, &status, 0);  // Wait for the child process to complete
+
+        // Ensure all descriptors are properly closed after execution
+        if (input_fd != STDIN_FILENO) {
+            close(input_fd);
+        }
+        if (output_fd != STDOUT_FILENO) {
+            close(output_fd);
         }
     }
 }
@@ -315,6 +332,11 @@ int main(int argc, char *argv[]) {
         }
 
         free_tokens(tokens);
+
+        // Ensure the prompt appears correctly after every command
+        if (is_interactive) {
+            printf("\n");
+        }
     }
 
     if (is_interactive) {
