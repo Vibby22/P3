@@ -1,25 +1,15 @@
 CC = gcc
-CFLAGS = -Wall -Werror -g
-
+CFLAGS = -Wall -Werror -fsanitize=address -g
 OBJ = main.o builtins.o command.o wildcards.o parser.o
+TARGET = mysh
 
-mysh: $(OBJ)
-    $(CC) $(CFLAGS) -o mysh $(OBJ)
+all: $(TARGET)
 
-main.o: main.c builtins.h command.h wildcards.h parser.h
-    $(CC) $(CFLAGS) -c main.c
+$(TARGET): $(OBJ)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ)
 
-builtins.o: builtins.c builtins.h
-    $(CC) $(CFLAGS) -c builtins.c
-
-command.o: command.c command.h
-    $(CC) $(CFLAGS) -c command.c
-
-wildcards.o: wildcards.c wildcards.h
-    $(CC) $(CFLAGS) -c wildcards.c
-
-parser.o: parser.c parser.h
-    $(CC) $(CFLAGS) -c parser.c
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-    rm -f *.o mysh
+	rm -f $(OBJ) $(TARGET)
