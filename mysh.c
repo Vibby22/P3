@@ -220,6 +220,38 @@ void free_tokens(char **tokens) {
     free(tokens);
 }
 
+// Function to handle pipes
+void handle_pipes(char **tokens) {
+    // Add the implementation for handling pipes here
+    // This implementation should match the prototype and ensure pipes work correctly
+}
+
+// Function to tokenize input commands
+char **tokenize_input(char *input) {
+    int size = 10, index = 0;
+    char **tokens = malloc(size * sizeof(char *));
+    if (!tokens) {
+        perror("malloc");
+        exit(EXIT_FAILURE);
+    }
+
+    char *token = strtok(input, " \t\n");
+    while (token != NULL) {
+        tokens[index++] = strdup(token);
+        if (index >= size) {
+            size *= 2;
+            tokens = realloc(tokens, size * sizeof(char *));
+            if (!tokens) {
+                perror("realloc");
+                exit(EXIT_FAILURE);
+            }
+        }
+        token = strtok(NULL, " \t\n");
+    }
+    tokens[index] = NULL;
+    return tokens;
+}
+
 // Main function
 int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
