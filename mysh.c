@@ -22,11 +22,10 @@ void expand_wildcards(char ***tokens_ptr);
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
         fprintf(stderr, "cd: missing argument\n");
-        return;
-    }
-    if (chdir(tokens[1]) != 0) {
+    } else if (chdir(tokens[1]) != 0) {
         perror("cd");
     }
+    fflush(stdout);
 }
 
 void handle_pwd() {
@@ -36,25 +35,38 @@ void handle_pwd() {
     } else {
         printf("%s\n", cwd);
     }
+    fflush(stdout);
 }
 
 void handle_which(char **tokens) {
     if (tokens[1] == NULL) {
         fprintf(stderr, "which: missing argument\n");
-        return;
-    }
-
-    const char *paths[] = {"/usr/local/bin", "/usr/bin", "/bin"};
-    char path[BUFFER_SIZE];
-    for (int i = 0; i < 3; i++) {
-        snprintf(path, sizeof(path), "%s/%s", paths[i], tokens[1]);
-        if (access(path, X_OK) == 0) {
-            printf("%s\n", path);
-            return;
+    } else {
+        const char *paths[] = {"/usr/local/bin", "/usr/bin", "/bin"};
+        char path[BUFFER_SIZE];
+        int found = 0;
+        for (int i = 0; i < 3; i++) {
+            snprintf(path, sizeof(path), "%s/%s", paths[i], tokens[1]);
+            if (access(path, X_OK) == 0) {
+                printf("%s\n", path);
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            fprintf(stderr, "which: command not found: %s\n", tokens[1]);
         }
     }
+    fflush(stdout);
+}
 
-    fprintf(stderr, "which: command not found: %s\n", tokens[1]);
+void handle_exit(char **tokens) {
+    if (tokens[1] != NULL) {
+        printf("Exiting with message: %s\n", tokens[1]);
+    }
+    fflush(stdout);
+    free_tokens(tokens);
+    exit(0);
 }
 
 void execute_external_command(char **tokens, int input_fd, int output_fd) {
@@ -96,71 +108,6 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
             close(output_fd);
         }
     }
-}
-
-void handle_pipes(char **tokens) {
-    int pipe_fd[2];
-    int prev_read_end = -1;
-    int i = 0;
-
-    while (i < BUFFER_SIZE && tokens[i] != NULL) {
-        // Collect tokens for the current command
-        char *current_command[BUFFER_SIZE];
-        int cmd_index = 0;
-
-        while (tokens[i] != NULL && strcmp(tokens[i], "|") != 0) {
-            current_command[cmd_index++] = tokens[i++];
-        }
-        current_command[cmd_index] = NULL;
-
-        // Create a pipe if there is a next command
-        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-            if (pipe(pipe_fd) < 0) {
-                perror("pipe");
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        // Fork a new process to execute the current command
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            exit(EXIT_FAILURE);
-        }
-
-        if (pid == 0) {  // Child process
-            if (prev_read_end != -1) {  // Redirect input from the previous pipe
-                dup2(prev_read_end, STDIN_FILENO);
-                close(prev_read_end);
-            }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {  // Redirect output to the current pipe
-                dup2(pipe_fd[1], STDOUT_FILENO);
-                close(pipe_fd[0]);
-                close(pipe_fd[1]);
-            }
-            if (execvp(current_command[0], current_command) == -1) {
-                perror("execvp");
-                exit(EXIT_FAILURE);
-            }
-        } else {  // Parent process
-            if (prev_read_end != -1) {
-                close(prev_read_end);
-            }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-                prev_read_end = pipe_fd[0];
-                close(pipe_fd[1]);
-            }
-        }
-
-        // Move to the next token after '|'
-        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-            i++;
-        }
-    }
-
-    // Wait for all child processes to complete
-    int status;
-    while (wait(&status) > 0);
 }
 
 char **tokenize_input(char *input) {
@@ -240,14 +187,6 @@ void free_tokens(char **tokens) {
     free(tokens);
 }
 
-void handle_exit(char **tokens) {
-    if (tokens[1] != NULL) {
-        printf("Exiting with message: %s\n", tokens[1]);
-    }
-    free_tokens(tokens);
-    exit(0);
-}
-
 int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
@@ -272,6 +211,7 @@ int main(int argc, char *argv[]) {
 
     if (is_interactive) {
         printf("Welcome to my shell!\n");
+        fflush(stdout);
     }
 
     while (1) {
