@@ -93,6 +93,7 @@ int handle_redirection(char **tokens, int *output_fd) {
             free(tokens[i + 1]);
             tokens[i] = NULL;
             tokens[i + 1] = NULL;
+
             return 1;
         }
     }
@@ -158,18 +159,31 @@ void expand_wildcards(char ***tokens_ptr) {
         exit(EXIT_FAILURE);
     }
 
+    // List of files to exclude during wildcard expansion
+    const char *exclusion_list[] = {"Makefile", NULL};
+
     for (int i = 0; tokens[i] != NULL; i++) {
         if (strchr(tokens[i], '*') || strchr(tokens[i], '?') || strchr(tokens[i], '[')) {
             glob_t glob_result;
             if (glob(tokens[i], GLOB_NOCHECK, NULL, &glob_result) == 0) {
                 for (size_t j = 0; j < glob_result.gl_pathc; j++) {
-                    expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
-                    if (index >= new_size) {
-                        new_size *= 2;
-                        expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
-                        if (!expanded_tokens) {
-                            perror("realloc");
-                            exit(EXIT_FAILURE);
+                    int is_excluded = 0;
+                    for (int k = 0; exclusion_list[k] != NULL; k++) {
+                        if (strcmp(glob_result.gl_pathv[j], exclusion_list[k]) == 0) {
+                            is_excluded = 1;
+                            break;
+                        }
+                    }
+
+                    if (!is_excluded) {
+                        expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
+                        if (index >= new_size) {
+                            new_size *= 2;
+                            expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
+                            if (!expanded_tokens) {
+                                perror("realloc");
+                                exit(EXIT_FAILURE);
+                            }
                         }
                     }
                 }
