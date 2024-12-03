@@ -332,11 +332,6 @@ int main(int argc, char *argv[]) {
         }
 
         free_tokens(tokens);
-
-        // Ensure the prompt appears correctly after every command
-        if (is_interactive) {
-            printf("\n");
-        }
     }
 
     if (is_interactive) {
