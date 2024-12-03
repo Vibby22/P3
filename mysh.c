@@ -86,7 +86,10 @@ int handle_redirection(char **tokens, int *output_fd) {
             }
 
             // Remove `>` and the filename from tokens
+            free(tokens[i]);
+            free(tokens[i + 1]);
             tokens[i] = NULL;
+            tokens[i + 1] = NULL;
             return 1;
         }
         if (strcmp(tokens[i], ">>") == 0) {
@@ -103,7 +106,10 @@ int handle_redirection(char **tokens, int *output_fd) {
             }
 
             // Remove `>>` and the filename from tokens
+            free(tokens[i]);
+            free(tokens[i + 1]);
             tokens[i] = NULL;
+            tokens[i + 1] = NULL;
             return 1;
         }
     }
@@ -116,6 +122,15 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
     if (redirection == -1) {
         return; // Error in handling redirection
     }
+
+    // Compact the tokens array to remove NULLs left by redirection removal
+    int j = 0;
+    for (int i = 0; tokens[i] != NULL; i++) {
+        if (tokens[i] != NULL) {
+            tokens[j++] = tokens[i];
+        }
+    }
+    tokens[j] = NULL;
 
     pid_t pid = fork();
 
