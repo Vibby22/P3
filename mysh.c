@@ -190,12 +190,10 @@ int main(int argc, char *argv[]) {
     ssize_t bytes_read;
     char **tokens;
     int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
-    int batch_mode = 0;                        // Flag for batch mode
     int input_fd = STDIN_FILENO;               // Default to standard input
 
     // Check for batch file input
     if (argc == 2) {
-        batch_mode = 1;
         input_fd = open(argv[1], O_RDONLY);
         if (input_fd < 0) {
             perror("open");
