@@ -14,9 +14,9 @@ void handle_pwd();
 void handle_which(char **tokens);
 void handle_exit(char **tokens);
 void execute_external_command(char **tokens, int input_fd, int output_fd);
-char **tokenize_input(char *input);  // Ensure this is declared properly
+char **tokenize_input(char *input);
 void free_tokens(char **tokens);
-void handle_pipes(char **tokens);  // Ensure this is declared properly
+void handle_pipes(char **tokens);
 void expand_wildcards(char ***tokens_ptr);
 int handle_redirection(char **tokens, int *output_fd);
 
@@ -148,42 +148,66 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
     }
 }
 
-// Function to handle pipe commands
-void handle_pipes(char **tokens) {
-    // Implementation of the pipe handling logic as in your original shell
-    // This function must be defined to match its prototype
-}
-
-// Function to tokenize input commands
-char **tokenize_input(char *input) {
-    int size = 10, index = 0;
-    char **tokens = malloc(size * sizeof(char *));
-    if (!tokens) {
+// Function to expand wildcards in commands
+void expand_wildcards(char ***tokens_ptr) {
+    char **tokens = *tokens_ptr;
+    int new_size = 10, index = 0;
+    char **expanded_tokens = malloc(new_size * sizeof(char *));
+    if (!expanded_tokens) {
         perror("malloc");
         exit(EXIT_FAILURE);
     }
 
-    char *token = strtok(input, " \t\n");
-    while (token != NULL) {
-        tokens[index++] = strdup(token);
-        if (index >= size) {
-            size *= 2;
-            tokens = realloc(tokens, size * sizeof(char *));
-            if (!tokens) {
-                perror("realloc");
-                exit(EXIT_FAILURE);
+    // List of files to exclude during wildcard expansion
+    const char *exclusion_list[] = {"Makefile", NULL};
+
+    for (int i = 0; tokens[i] != NULL; i++) {
+        if (strchr(tokens[i], '*') || strchr(tokens[i], '?') || strchr(tokens[i], '[')) {
+            glob_t glob_result;
+            if (glob(tokens[i], GLOB_NOCHECK, NULL, &glob_result) == 0) {
+                for (size_t j = 0; j < glob_result.gl_pathc; j++) {
+                    int is_excluded = 0;
+                    for (int k = 0; exclusion_list[k] != NULL; k++) {
+                        if (strcmp(glob_result.gl_pathv[j], exclusion_list[k]) == 0) {
+                            is_excluded = 1;
+                            break;
+                        }
+                    }
+
+                    if (!is_excluded) {
+                        expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
+                        if (index >= new_size) {
+                            new_size *= 2;
+                            expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
+                            if (!expanded_tokens) {
+                                perror("realloc");
+                                exit(EXIT_FAILURE);
+                            }
+                        }
+                    }
+                }
+                globfree(&glob_result);
+            }
+        } else {
+            expanded_tokens[index++] = strdup(tokens[i]);
+            if (index >= new_size) {
+                new_size *= 2;
+                expanded_tokens = realloc(expanded_tokens, new_size * sizeof(char *));
+                if (!expanded_tokens) {
+                    perror("realloc");
+                    exit(EXIT_FAILURE);
+                }
             }
         }
-        token = strtok(NULL, " \t\n");
     }
-    tokens[index] = NULL;
-    return tokens;
-}
 
-// Function to expand wildcards in commands
-void expand_wildcards(char ***tokens_ptr) {
-    // Wildcard handling logic with exclusions
-    // Make sure this is properly implemented
+    expanded_tokens[index] = NULL;
+
+    // Free the old tokens
+    free_tokens(tokens);
+
+    // Replace the tokens pointer with the expanded version
+    *tokens_ptr = expanded_tokens;
 }
 
 // Function to free memory allocated for tokens
