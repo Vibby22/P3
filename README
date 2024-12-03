@@ -15,4 +15,5 @@ Test Plan:
   - echo "Hello" > output.txt
 - We did some basic error handling
 - we tried to handle edge cases such as invalid files, nonexistent commands, and empty input
+- not sure if this is how its supposed to work but ls* prints everything, not just in my P3 directory, but in the Downloads directory, the one previous.
 
