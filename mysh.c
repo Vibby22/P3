@@ -17,7 +17,7 @@ void handle_exit(char **tokens);
 void execute_external_command(char **tokens);
 void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens);
 void handle_redirection(char **tokens, int *input_fd, int *output_fd);
-void expand_wildcards(char **tokens);
+void expand_wildcards(char ***tokens_ptr);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
 
@@ -65,7 +65,11 @@ void handle_exit(char **tokens) {
     exit(0);
 }
 
-void expand_wildcards(char **tokens) {
+void expand_wildcards(char ***tokens_ptr) {
+    char **tokens = *tokens_ptr;
+    char **expanded = NULL;
+    int expanded_count = 0;
+
     for (int i = 0; tokens[i] != NULL; i++) {
         if (strchr(tokens[i], '*')) {  // Check for wildcard
             DIR *dir = opendir(".");
@@ -75,31 +79,38 @@ void expand_wildcards(char **tokens) {
             }
 
             struct dirent *entry;
-            char **expanded = NULL;
-            int count = 0;
-
             while ((entry = readdir(dir)) != NULL) {
                 if (fnmatch(tokens[i], entry->d_name, 0) == 0) {  // Match pattern
-                    expanded = realloc(expanded, (count + 1) * sizeof(char *));
-                    expanded[count++] = strdup(entry->d_name);
+                    expanded = realloc(expanded, (expanded_count + 1) * sizeof(char *));
+                    if (!expanded) {
+                        perror("realloc");
+                        closedir(dir);
+                        return;
+                    }
+                    expanded[expanded_count++] = strdup(entry->d_name);
                 }
             }
             closedir(dir);
 
-            if (count > 0) {
-                expanded = realloc(expanded, (count + 1) * sizeof(char *));
-                expanded[count] = NULL;
-
-                free(tokens[i]);
-                tokens[i] = expanded[0];  // Replace token with first match
-                for (int j = 1; j < count; j++) {
+            if (expanded_count > 0) {
+                free(tokens[i]);  // Free the original wildcard token
+                tokens[i] = expanded[0];  // Replace with the first match
+                for (int j = 1; j < expanded_count; j++) {
                     tokens = realloc(tokens, (i + j + 1) * sizeof(char *));
+                    if (!tokens) {
+                        perror("realloc");
+                        return;
+                    }
                     tokens[i + j] = expanded[j];
                 }
-                tokens[i + count] = NULL;  // Null-terminate
+                tokens[i + expanded_count] = NULL;  // Null-terminate the array
+            } else {
+                fprintf(stderr, "No matches for wildcard: %s\n", tokens[i]);
             }
         }
     }
+
+    *tokens_ptr = tokens;  // Update the pointer to the modified array
 }
 
 void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
@@ -237,7 +248,17 @@ int main(int argc, char *argv[]) {
     ssize_t bytes_read;
     char **tokens;
     int is_interactive = isatty(STDIN_FILENO);
-    int batch_mode = (argc == 2);
+    int batch_mode = (argc == 2);  // Batch mode if a file is specified
+    int input_fd = STDIN_FILENO;   // Default to standard input
+
+    if (batch_mode) {
+        input_fd = open(argv[1], O_RDONLY);
+        if (input_fd < 0) {
+            perror("open");
+            return EXIT_FAILURE;
+        }
+        is_interactive = 0;  // Disable interactive behavior in batch mode
+    }
 
     if (is_interactive) {
         printf("Welcome to my shell!\n");
@@ -249,17 +270,17 @@ int main(int argc, char *argv[]) {
             fflush(stdout);
         }
 
-        bytes_read = read(STDIN_FILENO, buffer, BUFFER_SIZE - 1);
-        if (bytes_read <= 0) break;
-        buffer[bytes_read] = '\0';
+        bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
+        if (bytes_read <= 0) break;  // End of input
+        buffer[bytes_read] = '\0';  // Null-terminate the input string
 
         tokens = tokenize_input(buffer);
-        if (tokens[0] == NULL) {
+        if (tokens[0] == NULL) {  // Skip empty input
             free_tokens(tokens);
             continue;
         }
 
-        expand_wildcards(tokens);
+        expand_wildcards(&tokens);
 
         int pipe_index = -1;
         for (int i = 0; tokens[i] != NULL; i++) {
@@ -287,6 +308,10 @@ int main(int argc, char *argv[]) {
         }
 
         free_tokens(tokens);
+    }
+
+    if (batch_mode) {
+        close(input_fd);
     }
 
     if (is_interactive) {
