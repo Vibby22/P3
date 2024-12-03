@@ -70,7 +70,7 @@ void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
             }
             free(tokens[i]);
             free(tokens[i + 1]);
-            tokens[i] = NULL;  // Remove < and the file name from tokens
+            tokens[i] = NULL;
             tokens[i + 1] = NULL;
         } else if (strcmp(tokens[i], ">") == 0) {
             if (tokens[i + 1] == NULL) {
@@ -84,7 +84,7 @@ void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
             }
             free(tokens[i]);
             free(tokens[i + 1]);
-            tokens[i] = NULL;  // Remove > and the file name from tokens
+            tokens[i] = NULL;
             tokens[i + 1] = NULL;
         }
     }
@@ -118,7 +118,6 @@ void execute_external_command(char **tokens) {
             close(output_fd);
         }
 
-        // Use execvp to search for the command in PATH
         if (execvp(tokens[0], tokens) == -1) {
             perror("execvp");
             exit(EXIT_FAILURE);
@@ -148,6 +147,7 @@ void handle_pipes(char **tokens) {
     int i = 0;
 
     while (tokens[i] != NULL) {
+        // Collect tokens for the current command
         char *current_command[BUFFER_SIZE];
         int cmd_index = 0;
 
@@ -156,6 +156,7 @@ void handle_pipes(char **tokens) {
         }
         current_command[cmd_index] = NULL;
 
+        // Create a pipe if there is a next command
         if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
             if (pipe(pipe_fd) < 0) {
                 perror("pipe");
@@ -169,15 +170,15 @@ void handle_pipes(char **tokens) {
             exit(EXIT_FAILURE);
         }
 
-        if (pid == 0) {
-            if (prev_read_end != -1) {
+        if (pid == 0) {  // Child process
+            if (prev_read_end != -1) {  // Redirect input from the previous pipe
                 if (dup2(prev_read_end, STDIN_FILENO) == -1) {
                     perror("dup2");
                     exit(EXIT_FAILURE);
                 }
                 close(prev_read_end);
             }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {  // Redirect output to the current pipe
                 if (dup2(pipe_fd[1], STDOUT_FILENO) == -1) {
                     perror("dup2");
                     exit(EXIT_FAILURE);
@@ -189,7 +190,7 @@ void handle_pipes(char **tokens) {
                 perror("execvp");
                 exit(EXIT_FAILURE);
             }
-        } else {
+        } else {  // Parent process
             if (prev_read_end != -1) {
                 close(prev_read_end);
             }
@@ -199,11 +200,13 @@ void handle_pipes(char **tokens) {
             }
         }
 
+        // Move to the next token after '|'
         if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
             i++;
         }
     }
 
+    // Wait for all child processes to complete
     int status;
     while (wait(&status) > 0);
 }
@@ -252,10 +255,11 @@ int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
     char **tokens;
-    int is_interactive = isatty(STDIN_FILENO);
-    int batch_mode = 0;
-    int input_fd = STDIN_FILENO;
+    int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
+    int batch_mode = 0;                        // Flag for batch mode
+    int input_fd = STDIN_FILENO;               // Default to standard input
 
+    // Check for batch file input
     if (argc == 2) {
         batch_mode = 1;
         input_fd = open(argv[1], O_RDONLY);
@@ -263,7 +267,7 @@ int main(int argc, char *argv[]) {
             perror("open");
             exit(EXIT_FAILURE);
         }
-        is_interactive = 0;
+        is_interactive = 0;  // Batch mode disables interactive behavior
     } else if (argc > 2) {
         fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -284,17 +288,19 @@ int main(int argc, char *argv[]) {
             perror("read");
             break;
         } else if (bytes_read == 0) {
+            // End of input
             break;
         }
 
-        buffer[bytes_read] = '\0';
-        tokens = tokenize_input(buffer);
+        buffer[bytes_read] = '\0';  // Null-terminate the input string
+        tokens = tokenize_input(buffer);  // Tokenize the input
 
-        if (tokens[0] == NULL) {
+        if (tokens[0] == NULL) {  // Skip empty input
             free_tokens(tokens);
             continue;
         }
 
+        // Handle pipes if present
         int contains_pipe = 0;
         for (int j = 0; tokens[j] != NULL; j++) {
             if (strcmp(tokens[j], "|") == 0) {
@@ -306,6 +312,7 @@ int main(int argc, char *argv[]) {
         if (contains_pipe) {
             handle_pipes(tokens);
         } else {
+            // Handle built-in commands or execute external commands
             if (strcmp(tokens[0], "cd") == 0) {
                 handle_cd(tokens);
             } else if (strcmp(tokens[0], "pwd") == 0) {
