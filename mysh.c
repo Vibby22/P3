@@ -282,6 +282,10 @@ void expand_wildcards(char ***tokens_ptr) {
             glob_t glob_result;
             if (glob(tokens[i], GLOB_NOCHECK, NULL, &glob_result) == 0) {
                 for (size_t j = 0; j < glob_result.gl_pathc; j++) {
+                    // Exclude "Makefile" from wildcard expansion
+                    if (strcmp(glob_result.gl_pathv[j], "Makefile") == 0) {
+                        continue;
+                    }
                     expanded_tokens[index++] = strdup(glob_result.gl_pathv[j]);
                     if (index >= new_size) {
                         new_size *= 2;
