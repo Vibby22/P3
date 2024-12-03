@@ -1,0 +1,7 @@
+batch.sh
+input.txt
+Makefile
+mysh
+mysh.c
+output.txt
+README
