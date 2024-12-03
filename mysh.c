@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>  // For isatty(), chdir(), fork(), execvp(), dup2()
-#include <fcntl.h>   // For open()
-#include <sys/wait.h>  // For wait()
+#include <unistd.h>  // For system calls like fork(), exec(), chdir()
+#include <fcntl.h>   // For file operations
+#include <sys/wait.h>  // For process management
+#include <dirent.h>  // For wildcards
+#include <fnmatch.h> // For pattern matching
 
 #define BUFFER_SIZE 1024
 
@@ -13,10 +15,11 @@ void handle_pwd();
 void handle_which(char **tokens);
 void handle_exit(char **tokens);
 void execute_external_command(char **tokens);
+void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens);
+void handle_redirection(char **tokens, int *input_fd, int *output_fd);
+void expand_wildcards(char ***tokens_ptr);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
-void handle_redirection(char **tokens, int *input_fd, int *output_fd);
-void handle_pipes(char **tokens);
 
 void handle_cd(char **tokens) {
     if (tokens[1] == NULL) {
@@ -52,8 +55,80 @@ void handle_which(char **tokens) {
             return;
         }
     }
-
     fprintf(stderr, "which: command not found: %s\n", tokens[1]);
+}
+
+void handle_exit(char **tokens) {
+    if (tokens[1] != NULL) {
+        printf("Exiting with message: %s\n", tokens[1]);
+    }
+    exit(0);
+}
+
+void expand_wildcards(char ***tokens_ptr) {
+    char **tokens = *tokens_ptr;
+    char **expanded_tokens = NULL; // Array to hold the expanded tokens
+    int expanded_count = 0;
+
+    for (int i = 0; tokens[i] != NULL; i++) {
+        if (strchr(tokens[i], '*')) {  // Check if token contains a wildcard
+            DIR *dir = opendir(".");
+            if (!dir) {
+                perror("opendir");
+                continue;
+            }
+
+            struct dirent *entry;
+            int matches_found = 0;
+
+            while ((entry = readdir(dir)) != NULL) {
+                if (fnmatch(tokens[i], entry->d_name, 0) == 0) {  // Match the pattern
+                    expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
+                    if (!expanded_tokens) {
+                        perror("realloc");
+                        closedir(dir);
+                        return;
+                    }
+                    expanded_tokens[expanded_count++] = strdup(entry->d_name);  // Add match
+                    matches_found++;
+                }
+            }
+            closedir(dir);
+
+            if (matches_found == 0) {  // No matches, retain the original token
+                expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
+                if (!expanded_tokens) {
+                    perror("realloc");
+                    return;
+                }
+                expanded_tokens[expanded_count++] = strdup(tokens[i]);  // Keep original
+                fprintf(stderr, "No matches for wildcard: %s\n", tokens[i]);
+            }
+        } else {  // No wildcard, add the token as is
+            expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
+            if (!expanded_tokens) {
+                perror("realloc");
+                return;
+            }
+            expanded_tokens[expanded_count++] = strdup(tokens[i]);
+        }
+    }
+
+    // Null-terminate the expanded tokens array
+    expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
+    if (!expanded_tokens) {
+        perror("realloc");
+        return;
+    }
+    expanded_tokens[expanded_count] = NULL;
+
+    // Free the original tokens
+    for (int i = 0; tokens[i] != NULL; i++) {
+        free(tokens[i]);
+    }
+    free(tokens);
+
+    *tokens_ptr = expanded_tokens;  // Update the pointer to the new array
 }
 
 void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
@@ -68,10 +143,7 @@ void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
                 perror("open input file");
                 return;
             }
-            free(tokens[i]);
-            free(tokens[i + 1]);
             tokens[i] = NULL;
-            tokens[i + 1] = NULL;
         } else if (strcmp(tokens[i], ">") == 0) {
             if (tokens[i + 1] == NULL) {
                 fprintf(stderr, "Syntax error: no file specified for output redirection\n");
@@ -82,12 +154,52 @@ void handle_redirection(char **tokens, int *input_fd, int *output_fd) {
                 perror("open output file");
                 return;
             }
-            free(tokens[i]);
-            free(tokens[i + 1]);
             tokens[i] = NULL;
-            tokens[i + 1] = NULL;
         }
     }
+}
+
+void execute_with_pipe(char **cmd1_tokens, char **cmd2_tokens) {
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return;
+    }
+
+    pid_t pid1 = fork();
+    if (pid1 < 0) {
+        perror("fork");
+        return;
+    }
+
+    if (pid1 == 0) {  // First child
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execvp(cmd1_tokens[0], cmd1_tokens);
+        perror("execvp");
+        exit(EXIT_FAILURE);
+    }
+
+    pid_t pid2 = fork();
+    if (pid2 < 0) {
+        perror("fork");
+        return;
+    }
+
+    if (pid2 == 0) {  // Second child
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        execvp(cmd2_tokens[0], cmd2_tokens);
+        perror("execvp");
+        exit(EXIT_FAILURE);
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
 }
 
 void execute_external_command(char **tokens) {
@@ -95,120 +207,26 @@ void execute_external_command(char **tokens) {
     handle_redirection(tokens, &input_fd, &output_fd);
 
     pid_t pid = fork();
-
     if (pid < 0) {
         perror("fork");
         return;
     }
 
-    if (pid == 0) {
-        // Child process
+    if (pid == 0) {  // Child process
         if (input_fd != -1) {
-            if (dup2(input_fd, STDIN_FILENO) == -1) {
-                perror("dup2 input");
-                exit(EXIT_FAILURE);
-            }
+            dup2(input_fd, STDIN_FILENO);
             close(input_fd);
         }
         if (output_fd != -1) {
-            if (dup2(output_fd, STDOUT_FILENO) == -1) {
-                perror("dup2 output");
-                exit(EXIT_FAILURE);
-            }
+            dup2(output_fd, STDOUT_FILENO);
             close(output_fd);
         }
-
-        if (execvp(tokens[0], tokens) == -1) {
-            perror("execvp");
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        // Parent process
-        int status;
-        if (wait(&status) == -1) {
-            perror("wait");
-        } else {
-            if (WIFEXITED(status)) {
-                if (WEXITSTATUS(status) != 0) {
-                    fprintf(stderr, "Command failed with code %d\n", WEXITSTATUS(status));
-                }
-            } else if (WIFSIGNALED(status)) {
-                fprintf(stderr, "Terminated by signal: %d\n", WTERMSIG(status));
-            }
-        }
-        if (input_fd != -1) close(input_fd);
-        if (output_fd != -1) close(output_fd);
+        execvp(tokens[0], tokens);
+        perror("execvp");
+        exit(EXIT_FAILURE);
+    } else {  // Parent process
+        wait(NULL);
     }
-}
-
-void handle_pipes(char **tokens) {
-    int pipe_fd[2];
-    int prev_read_end = -1;
-    int i = 0;
-
-    while (tokens[i] != NULL) {
-        // Collect tokens for the current command
-        char *current_command[BUFFER_SIZE];
-        int cmd_index = 0;
-
-        while (tokens[i] != NULL && strcmp(tokens[i], "|") != 0) {
-            current_command[cmd_index++] = tokens[i++];
-        }
-        current_command[cmd_index] = NULL;
-
-        // Create a pipe if there is a next command
-        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-            if (pipe(pipe_fd) < 0) {
-                perror("pipe");
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            exit(EXIT_FAILURE);
-        }
-
-        if (pid == 0) {  // Child process
-            if (prev_read_end != -1) {  // Redirect input from the previous pipe
-                if (dup2(prev_read_end, STDIN_FILENO) == -1) {
-                    perror("dup2");
-                    exit(EXIT_FAILURE);
-                }
-                close(prev_read_end);
-            }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {  // Redirect output to the current pipe
-                if (dup2(pipe_fd[1], STDOUT_FILENO) == -1) {
-                    perror("dup2");
-                    exit(EXIT_FAILURE);
-                }
-                close(pipe_fd[0]);
-                close(pipe_fd[1]);
-            }
-            if (execvp(current_command[0], current_command) == -1) {
-                perror("execvp");
-                exit(EXIT_FAILURE);
-            }
-        } else {  // Parent process
-            if (prev_read_end != -1) {
-                close(prev_read_end);
-            }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-                prev_read_end = pipe_fd[0];
-                close(pipe_fd[1]);
-            }
-        }
-
-        // Move to the next token after '|'
-        if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
-            i++;
-        }
-    }
-
-    // Wait for all child processes to complete
-    int status;
-    while (wait(&status) > 0);
 }
 
 char **tokenize_input(char *input) {
@@ -243,34 +261,21 @@ void free_tokens(char **tokens) {
     free(tokens);
 }
 
-void handle_exit(char **tokens) {
-    if (tokens[1] != NULL) {
-        printf("Exiting with message: %s\n", tokens[1]);
-    }
-    free_tokens(tokens);
-    exit(0);
-}
-
 int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
     char **tokens;
-    int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
-    int batch_mode = 0;                        // Flag for batch mode
-    int input_fd = STDIN_FILENO;               // Default to standard input
+    int is_interactive = isatty(STDIN_FILENO);
+    int batch_mode = (argc == 2);  // Batch mode if a file is specified
+    int input_fd = STDIN_FILENO;   // Default to standard input
 
-    // Check for batch file input
-    if (argc == 2) {
-        batch_mode = 1;
+    if (batch_mode) {
         input_fd = open(argv[1], O_RDONLY);
         if (input_fd < 0) {
             perror("open");
-            exit(EXIT_FAILURE);
+            return EXIT_FAILURE;
         }
-        is_interactive = 0;  // Batch mode disables interactive behavior
-    } else if (argc > 2) {
-        fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
-        exit(EXIT_FAILURE);
+        is_interactive = 0;  // Disable interactive behavior in batch mode
     }
 
     if (is_interactive) {
@@ -284,46 +289,40 @@ int main(int argc, char *argv[]) {
         }
 
         bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-        if (bytes_read < 0) {
-            perror("read");
-            break;
-        } else if (bytes_read == 0) {
-            // End of input
-            break;
-        }
-
+        if (bytes_read <= 0) break;  // End of input
         buffer[bytes_read] = '\0';  // Null-terminate the input string
-        tokens = tokenize_input(buffer);  // Tokenize the input
 
+        tokens = tokenize_input(buffer);
         if (tokens[0] == NULL) {  // Skip empty input
             free_tokens(tokens);
             continue;
         }
 
-        // Handle pipes if present
-        int contains_pipe = 0;
-        for (int j = 0; tokens[j] != NULL; j++) {
-            if (strcmp(tokens[j], "|") == 0) {
-                contains_pipe = 1;
+        expand_wildcards(&tokens);
+
+        int pipe_index = -1;
+        for (int i = 0; tokens[i] != NULL; i++) {
+            if (strcmp(tokens[i], "|") == 0) {
+                pipe_index = i;
                 break;
             }
         }
 
-        if (contains_pipe) {
-            handle_pipes(tokens);
+        if (pipe_index != -1) {
+            tokens[pipe_index] = NULL;
+            char **cmd1_tokens = tokens;
+            char **cmd2_tokens = &tokens[pipe_index + 1];
+            execute_with_pipe(cmd1_tokens, cmd2_tokens);
+        } else if (strcmp(tokens[0], "cd") == 0) {
+            handle_cd(tokens);
+        } else if (strcmp(tokens[0], "pwd") == 0) {
+            handle_pwd();
+        } else if (strcmp(tokens[0], "which") == 0) {
+            handle_which(tokens);
+        } else if (strcmp(tokens[0], "exit") == 0) {
+            handle_exit(tokens);
         } else {
-            // Handle built-in commands or execute external commands
-            if (strcmp(tokens[0], "cd") == 0) {
-                handle_cd(tokens);
-            } else if (strcmp(tokens[0], "pwd") == 0) {
-                handle_pwd();
-            } else if (strcmp(tokens[0], "which") == 0) {
-                handle_which(tokens);
-            } else if (strcmp(tokens[0], "exit") == 0) {
-                handle_exit(tokens);
-            } else {
-                execute_external_command(tokens);
-            }
+            execute_external_command(tokens);
         }
 
         free_tokens(tokens);
@@ -339,3 +338,4 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
+
