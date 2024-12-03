@@ -9,7 +9,7 @@
 
 #define BUFFER_SIZE 1024
 
-// Function prototypes
+// Function pre-declarations to prevent explosions
 void handle_cd(char **tokens);
 void handle_pwd();
 void handle_which(char **tokens);
@@ -21,7 +21,9 @@ void expand_wildcards(char ***tokens_ptr);
 char **tokenize_input(char *input);
 void free_tokens(char **tokens);
 
+// handles directory changes
 void handle_cd(char **tokens) {
+    // checks for missing arguments
     if (tokens[1] == NULL) {
         fprintf(stderr, "cd: missing argument\n");
         return;
@@ -33,6 +35,7 @@ void handle_cd(char **tokens) {
 
 void handle_pwd() {
     char cwd[BUFFER_SIZE];
+    //uses cwd to check filepath -> makes sure it is not NULL
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         perror("pwd");
     } else {
@@ -41,11 +44,13 @@ void handle_pwd() {
 }
 
 void handle_which(char **tokens) {
+    // checks next token (error-proofing)
     if (tokens[1] == NULL) {
         fprintf(stderr, "which: missing argument\n");
         return;
     }
 
+    // array to handle builtins like ls, echo, wc, etc.
     const char *paths[] = {"/usr/local/bin", "/usr/bin", "/bin"};
     char path[BUFFER_SIZE];
     for (int i = 0; i < 3; i++) {
@@ -58,20 +63,25 @@ void handle_which(char **tokens) {
     fprintf(stderr, "which: command not found: %s\n", tokens[1]);
 }
 
+// handles exit
 void handle_exit(char **tokens) {
     if (tokens[1] != NULL) {
         printf("Exiting with message: %s\n", tokens[1]);
     }
+    // frees tokens on exit to avoid leaks
+    free_tokens(char **tokens);
     exit(0);
 }
 
+// processes wildcards
 void expand_wildcards(char ***tokens_ptr) {
     char **tokens = *tokens_ptr;
-    char **expanded_tokens = NULL; // Array to hold the expanded tokens
+    char **expanded_tokens = NULL; // array to hold the expanded tokens
     int expanded_count = 0;
 
     for (int i = 0; tokens[i] != NULL; i++) {
-        if (strchr(tokens[i], '*')) {  // Check if token contains a wildcard
+        if (strchr(tokens[i], '*')) {  // check if token contains a wildcard
+            // attempts to process '.'
             DIR *dir = opendir(".");
             if (!dir) {
                 perror("opendir");
@@ -82,20 +92,20 @@ void expand_wildcards(char ***tokens_ptr) {
             int matches_found = 0;
 
             while ((entry = readdir(dir)) != NULL) {
-                if (fnmatch(tokens[i], entry->d_name, 0) == 0) {  // Match the pattern
+                if (fnmatch(tokens[i], entry->d_name, 0) == 0) {  // match the pattern
                     expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
                     if (!expanded_tokens) {
                         perror("realloc");
                         closedir(dir);
                         return;
                     }
-                    expanded_tokens[expanded_count++] = strdup(entry->d_name);  // Add match
+                    expanded_tokens[expanded_count++] = strdup(entry->d_name);  // add match
                     matches_found++;
                 }
             }
             closedir(dir);
 
-            if (matches_found == 0) {  // No matches, retain the original token
+            if (matches_found == 0) {  // if no matches, preserve original token
                 expanded_tokens = realloc(expanded_tokens, (expanded_count + 1) * sizeof(char *));
                 if (!expanded_tokens) {
                     perror("realloc");
