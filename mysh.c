@@ -77,13 +77,6 @@ void execute_external_command(char **tokens, int input_fd, int output_fd) {
             perror("execvp");
             exit(EXIT_FAILURE);
         }
-    } else {  // Parent process
-        int status;
-        if (wait(&status) == -1) {
-            perror("wait");
-        } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-            fprintf(stderr, "Command failed with code %d\n", WEXITSTATUS(status));
-        }
     }
 }
 
@@ -118,11 +111,11 @@ void handle_pipes(char **tokens) {
         }
 
         if (pid == 0) {  // Child process
-            if (prev_read_end != -1) {
+            if (prev_read_end != -1) {  // Redirect input from the previous pipe
                 dup2(prev_read_end, STDIN_FILENO);
                 close(prev_read_end);
             }
-            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {
+            if (tokens[i] != NULL && strcmp(tokens[i], "|") == 0) {  // Redirect output to the current pipe
                 dup2(pipe_fd[1], STDOUT_FILENO);
                 close(pipe_fd[0]);
                 close(pipe_fd[1]);
@@ -148,9 +141,8 @@ void handle_pipes(char **tokens) {
     }
 
     // Wait for all child processes to complete
-    for (int j = 0; j < i; j++) {
-        wait(NULL);
-    }
+    int status;
+    while (wait(&status) > 0);
 }
 
 char **tokenize_input(char *input) {
