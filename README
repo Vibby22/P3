@@ -1,0 +1,18 @@
+Authors:
+Vibhav Dwibhashyam vvd14
+Kapil Rajpopat ktr43
+
+Test Plan:
+- started with tokenizing the input that came through from our loop
+- implemented built in commands like pwd, cd, which, and exit (Ex: cd subdir, exit: Byebye!)
+- used execv() to start programs
+- made a test batch file to test batch mode ( ./mysh batch.sh)
+- we implemented wildcards, pipes, and redirection, making sure to test multiple commands for each.
+- Examples:
+  - cat < input.txt
+  - ls *.txt
+  - ls i*t
+  - echo "Hello" > output.txt
+- We did some basic error handling
+- we tried to handle edge cases such as invalid files, nonexistent commands, and empty input
+
