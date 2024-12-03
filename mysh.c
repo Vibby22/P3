@@ -25,7 +25,6 @@ void handle_cd(char **tokens) {
     } else if (chdir(tokens[1]) != 0) {
         perror("cd");
     }
-    printf("\n");
     fflush(stdout);
 }
 
@@ -58,7 +57,6 @@ void handle_which(char **tokens) {
             fprintf(stderr, "which: command not found: %s\n", tokens[1]);
         }
     }
-    printf("\n");
     fflush(stdout);
 }
 
@@ -262,21 +260,18 @@ void free_tokens(char **tokens) {
 
 int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
-    ssize_t bytes_read;
     char **tokens;
+    FILE *batch_file = NULL;
     int is_interactive = isatty(STDIN_FILENO);  // Check if input is from a terminal
-    int input_fd = STDIN_FILENO;               // Default to standard input
-    int batch_mode = 0;
 
     // Check for batch file input
     if (argc == 2) {
-        input_fd = open(argv[1], O_RDONLY);
-        if (input_fd < 0) {
-            perror("open");
+        batch_file = fopen(argv[1], "r");
+        if (!batch_file) {
+            perror("fopen");
             exit(EXIT_FAILURE);
         }
         is_interactive = 0;  // Batch mode disables interactive behavior
-        batch_mode = 1;      // Set batch mode flag
     } else if (argc > 2) {
         fprintf(stderr, "Usage: %s [batch_file]\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -291,107 +286,58 @@ int main(int argc, char *argv[]) {
         if (is_interactive) {
             printf("mysh> ");
             fflush(stdout);
+            if (!fgets(buffer, BUFFER_SIZE, stdin)) {
+                break;  // End of input
+            }
+        } else if (batch_file) {
+            if (!fgets(buffer, BUFFER_SIZE, batch_file)) {
+                break;  // End of file
+            }
         }
 
-        // Read input line by line in batch mode
-        if (batch_mode) {
-            bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-            if (bytes_read <= 0) {
-                break;  // End of input or error
-            }
+        // Remove trailing newline
+        buffer[strcspn(buffer, "\n")] = '\0';
 
-            buffer[bytes_read] = '\0';
-            char *line = strtok(buffer, "\n");
-            while (line != NULL) {
-                tokens = tokenize_input(line);
-                expand_wildcards(&tokens);
+        tokens = tokenize_input(buffer);
+        expand_wildcards(&tokens);
 
-                if (tokens[0] != NULL) {
-                    int contains_pipe = 0;
-                    for (int j = 0; tokens[j] != NULL; j++) {
-                        if (strcmp(tokens[j], "|") == 0) {
-                            contains_pipe = 1;
-                            break;
-                        }
-                    }
-
-                    if (contains_pipe) {
-                        handle_pipes(tokens);
-                    } else {
-                        if (strcmp(tokens[0], "cd") == 0) {
-                            handle_cd(tokens);
-                        } else if (strcmp(tokens[0], "pwd") == 0) {
-                            handle_pwd();
-                        } else if (strcmp(tokens[0], "which") == 0) {
-                            handle_which(tokens);
-                        } else if (strcmp(tokens[0], "exit") == 0) {
-                            handle_exit(tokens);
-                        } else {
-                            execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
-                        }
-                    }
-                }
-
-                free_tokens(tokens);
-                line = strtok(NULL, "\n");
-                if (batch_mode) {
-                    printf("\n");
-                    fflush(stdout);
-                }
-            }
-        } else {
-            bytes_read = read(input_fd, buffer, BUFFER_SIZE - 1);
-            if (bytes_read < 0) {
-                perror("read");
-                break;
-            } else if (bytes_read == 0) {
-                // End of input
-                break;
-            }
-
-            buffer[bytes_read] = '\0';
-            tokens = tokenize_input(buffer);
-
-            // Expand any wildcards in the tokens
-            expand_wildcards(&tokens);
-
-            if (tokens[0] == NULL) {  // Skip empty input
-                free_tokens(tokens);
-                continue;
-            }
-
-            // Handle pipes if present
-            int contains_pipe = 0;
-            for (int j = 0; tokens[j] != NULL; j++) {
-                if (strcmp(tokens[j], "|") == 0) {
-                    contains_pipe = 1;
-                    break;
-                }
-            }
-
-            if (contains_pipe) {
-                handle_pipes(tokens);
-            } else {
-                if (strcmp(tokens[0], "cd") == 0) {
-                    handle_cd(tokens);
-                } else if (strcmp(tokens[0], "pwd") == 0) {
-                    handle_pwd();
-                } else if (strcmp(tokens[0], "which") == 0) {
-                    handle_which(tokens);
-                } else if (strcmp(tokens[0], "exit") == 0) {
-                    handle_exit(tokens);
-                } else {
-                    execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
-                }
-            }
-
+        if (tokens[0] == NULL) {  // Skip empty input
             free_tokens(tokens);
+            continue;
         }
+
+        // Handle pipes if present
+        int contains_pipe = 0;
+        for (int j = 0; tokens[j] != NULL; j++) {
+            if (strcmp(tokens[j], "|") == 0) {
+                contains_pipe = 1;
+                break;
+            }
+        }
+
+        if (contains_pipe) {
+            handle_pipes(tokens);
+        } else {
+            // No pipes, execute a single command
+            if (strcmp(tokens[0], "cd") == 0) {
+                handle_cd(tokens);
+            } else if (strcmp(tokens[0], "pwd") == 0) {
+                handle_pwd();
+            } else if (strcmp(tokens[0], "which") == 0) {
+                handle_which(tokens);
+            } else if (strcmp(tokens[0], "exit") == 0) {
+                handle_exit(tokens);
+            } else {
+                execute_external_command(tokens, STDIN_FILENO, STDOUT_FILENO);
+            }
+        }
+
+        free_tokens(tokens);
     }
 
-    // If batch mode, exit after finishing
-    if (batch_mode) {
-        close(input_fd);
+    // If batch mode, close the file and exit
+    if (batch_file) {
+        fclose(batch_file);
         exit(0);
     }
 
